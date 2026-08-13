@@ -43,9 +43,11 @@ public sealed class CodexKernelAdapterTests
     public async Task ModelsAndThreadLifecycleMapToHostContracts()
     {
         var calls = new List<string>();
-        var fixture = await TestSupport.CreateInitializedAdapterAsync((method, _) =>
+        JsonElement? forkParameters = null;
+        var fixture = await TestSupport.CreateInitializedAdapterAsync((method, parameters) =>
         {
             calls.Add(method);
+            if (method == "thread/fork") forkParameters = parameters.Clone();
             return method switch
             {
                 "model/list" => new { data = new[] { new { id = "gpt-5.6", model = "gpt-5.6", displayName = "GPT-5.6", description = "Model", isDefault = true, defaultReasoningEffort = "high" } }, nextCursor = (string?)null },
@@ -64,7 +66,10 @@ public sealed class CodexKernelAdapterTests
         var created = await adapter.CreateSessionAsync(new CreateSessionRequest(
             new WorkspaceDescriptor("w", "C:/work", Array.Empty<string>(), true), "Named", null, null));
         var resumed = await adapter.ResumeSessionAsync(created.Session);
-        var forked = await adapter.ForkSessionAsync(new ForkSessionRequest(created.Session, Title: "Fork"));
+        var forked = await adapter.ForkSessionAsync(new ForkSessionRequest(
+            created.Session,
+            new NativeForkPoint(ForkPointKind.Turn, "turn-7"),
+            "Fork"));
         var history = await adapter.ReadHistoryAsync(created.Session, new PageRequest());
         await adapter.ArchiveSessionAsync(created.Session);
 
@@ -73,6 +78,10 @@ public sealed class CodexKernelAdapterTests
         Assert.Equal("Named", created.Title);
         Assert.Equal(created.Session.NativeSessionId, resumed.Session.NativeSessionId);
         Assert.Equal("t-fork", forked.Session.NativeSessionId);
+        Assert.Equal("turn-7", forkParameters?.GetProperty("lastTurnId").GetString());
+        await Assert.ThrowsAsync<ArgumentException>(() => adapter.ForkSessionAsync(new ForkSessionRequest(
+            created.Session,
+            new NativeForkPoint(ForkPointKind.Message, "message-7"))));
         Assert.IsType<TextContentBlock>(Assert.Single(history.Items).Content.Single());
         Assert.Contains("thread/archive", calls);
         Assert.Contains(Path.GetFullPath("C:/work"), adapter.Descriptor.Security.WritableRoots, StringComparer.OrdinalIgnoreCase);

@@ -217,7 +217,17 @@ public sealed class OpenCodeAdapter(
     public async Task<KernelSessionSummary> ForkSessionAsync(ForkSessionRequest request, CancellationToken cancellationToken = default)
     {
         Validate(request.Session);
-        OpenCodeSession native = await Api().ForkSessionAsync(request.Session.NativeSessionId, request.NativeItemId, Directory(request.Session), cancellationToken).ConfigureAwait(false);
+        if (request.Point is not null && request.Point.Kind != ForkPointKind.Message)
+        {
+            throw new ArgumentException(
+                "OpenCode session fork accepts a native message ID, not a turn or part/item ID.",
+                nameof(request));
+        }
+
+        string? nativeMessageId = request.Point?.NativeId;
+        if (request.Point is not null && string.IsNullOrWhiteSpace(nativeMessageId))
+            throw new ArgumentException("A native fork-point ID cannot be empty.", nameof(request));
+        OpenCodeSession native = await Api().ForkSessionAsync(request.Session.NativeSessionId, nativeMessageId, Directory(request.Session), cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(request.Title)) native = await Api().UpdateSessionAsync(native.Id, request.Title, null, native.Directory, cancellationToken).ConfigureAwait(false);
         if (native.Directory is not null) _directories[native.Id] = native.Directory;
         return ToSession(native);
@@ -254,13 +264,13 @@ public sealed class OpenCodeAdapter(
     {
         if (response.AmendedInput is not null) throw new NotSupportedException("OpenCode permission replies do not accept amended tool input.");
         string reply = response.ChoiceId switch { "once" => "once", "always" => "always", "reject" => "reject", _ => throw new ArgumentException("Unknown OpenCode permission choice.", nameof(response)) };
-        _permissionDirectories.TryGetValue(response.PermissionId, out string? directory);
+        _permissionDirectories.TryRemove(response.PermissionId, out string? directory);
         await Api().ReplyPermissionAsync(response.PermissionId, reply, null, directory, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RespondToElicitationAsync(ElicitationResponse response, CancellationToken cancellationToken = default)
     {
-        _questionDirectories.TryGetValue(response.RequestId, out string? directory);
+        _questionDirectories.TryRemove(response.RequestId, out string? directory);
         if (response.Cancelled)
             await Api().RejectQuestionAsync(response.RequestId, directory, cancellationToken).ConfigureAwait(false);
         else if (response.Value is JsonElement value)

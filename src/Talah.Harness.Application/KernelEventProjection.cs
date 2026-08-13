@@ -17,7 +17,8 @@ internal sealed class KernelEventProjection(CanonicalRepository repository)
         KernelEvent sanitized = SensitiveEventSanitizer.Sanitize(kernelEvent);
         string nativeEventId = CreateIdentity(sanitized);
         EventAppendResult result = await _repository.AppendEventAsync(nativeEventId, sanitized, cancellationToken).ConfigureAwait(false);
-        await ApplyAsync(sanitized, cancellationToken).ConfigureAwait(false);
+        if (result.Inserted)
+            await ApplyAsync(sanitized, cancellationToken).ConfigureAwait(false);
         return new StoredCanonicalEvent(result.HostSequence, nativeEventId, sanitized);
     }
 

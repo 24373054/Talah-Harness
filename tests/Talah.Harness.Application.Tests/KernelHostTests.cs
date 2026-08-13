@@ -205,6 +205,41 @@ public sealed class KernelHostTests
     }
 
     [Fact]
+    public async Task DuplicateOlderNativeEventCannotRegressNewerSessionProjection()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        KernelSessionSummary oldSummary = session with { Title = "old", UpdatedAt = now };
+        KernelSessionSummary newSummary = session with { Title = "new", UpdatedAt = now.AddSeconds(1) };
+        KernelEvent older = fixture.Adapter.MakeEvent(
+            session.Session,
+            20,
+            KernelEventKind.SessionMetadataChanged,
+            new SessionEventData(oldSummary),
+            nativeEventId: "session-old");
+        KernelEvent newer = fixture.Adapter.MakeEvent(
+            session.Session,
+            21,
+            KernelEventKind.SessionMetadataChanged,
+            new SessionEventData(newSummary),
+            nativeEventId: "session-new");
+        await fixture.Adapter.EmitAsync(older);
+        await fixture.Adapter.EmitAsync(newer);
+        await fixture.Adapter.EmitAsync(older with { Sequence = 200, Timestamp = now.AddMinutes(1) });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () =>
+            string.Equals((await fixture.Repository.GetSessionAsync(session.Session, timeout.Token))?.Summary.Title, "new", StringComparison.Ordinal),
+            timeout.Token);
+        await Task.Delay(100, timeout.Token);
+
+        Assert.Equal("new", (await fixture.Repository.GetSessionAsync(session.Session, timeout.Token))!.Summary.Title);
+        IReadOnlyList<StoredCanonicalEvent> events = await fixture.Repository.GetEventsAfterAsync(0, 30, cancellationToken: timeout.Token);
+        Assert.Single(events, item => item.Event.NativeEventId == "session-old");
+    }
+
+    [Fact]
     public async Task VendorPayloadSecretsAreRedactedBeforeDurablePersistence()
     {
         await using var fixture = new HostFixture();

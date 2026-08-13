@@ -309,9 +309,17 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         CancellationToken cancellationToken = default)
     {
         ValidateSession(request.Session);
+        if (request.Point is not null && request.Point.Kind != ForkPointKind.Turn)
+        {
+            throw new ArgumentException(
+                "Codex thread/fork accepts a native turn ID, not an item or message ID.",
+                nameof(request));
+        }
+
+        string? nativeTurnId = ValidateForkPoint(request.Point);
         JsonElement result = await _client.RequestAsync(
             "thread/fork",
-            new { threadId = request.Session.NativeSessionId, lastTurnId = request.NativeItemId },
+            new { threadId = request.Session.NativeSessionId, lastTurnId = nativeTurnId },
             cancellationToken).ConfigureAwait(false);
         KernelSessionSummary summary = MapSession(RequiredProperty(result, "thread"), request.Title);
         if (!string.IsNullOrWhiteSpace(request.Title))
@@ -322,6 +330,21 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         }
 
         return summary;
+    }
+
+    private static string? ValidateForkPoint(NativeForkPoint? point)
+    {
+        if (point is null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(point.NativeId))
+        {
+            throw new ArgumentException("A native fork-point ID cannot be empty.", nameof(point));
+        }
+
+        return point.NativeId;
     }
 
     public async Task ArchiveSessionAsync(SessionRef session, CancellationToken cancellationToken = default)

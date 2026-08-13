@@ -40,9 +40,20 @@ public sealed record CreateSessionRequest(
     string? AgentId,
     IReadOnlyDictionary<string, string>? Options = null);
 
+public enum ForkPointKind
+{
+    Turn,
+    Message,
+    Item
+}
+
+public sealed record NativeForkPoint(
+    ForkPointKind Kind,
+    string NativeId);
+
 public sealed record ForkSessionRequest(
     SessionRef Session,
-    string? NativeItemId = null,
+    NativeForkPoint? Point = null,
     string? Title = null);
 
 public sealed record TurnInput(
