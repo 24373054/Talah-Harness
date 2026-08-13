@@ -1,0 +1,26 @@
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+**/*.suo
+artifacts/
+packages/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+*.log
+.idea/
+.vscode/
+src/Talah.Harness.App/AppPackages/
+src/Talah.Harness.App/BundleArtifacts/
+src/Talah.Harness.App/Generated Files/
+installer/output/
+runtime-cache/
+local-data/
+*.pfx
+*.snk
+*.key
+*.pem
+*.secrets.json
+

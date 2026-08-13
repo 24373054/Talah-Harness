@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Talah.Harness.Contracts</RootNamespace>
+    <Description>Stable host-to-kernel contracts for Talah Harness.</Description>
+  </PropertyGroup>
+</Project>
+
