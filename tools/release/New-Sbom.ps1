@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $toolPath 'dotnet-CycloneDX.exe'))) 
 }
 
 $cycloneDx = Join-Path $toolPath 'dotnet-CycloneDX.exe'
-Invoke-NativeCommand -FilePath $cycloneDx -ArgumentList @($solution, '-o', $outputPath, '-F', 'Json', '-f', 'sbom.cdx.json', '-rs', '-dpr') -FailureMessage 'CycloneDX SBOM generation failed.'
+Invoke-NativeCommand -FilePath $cycloneDx -ArgumentList @($solution, '-o', $outputPath, '-F', 'Json', '-fn', 'sbom.cdx.json', '-t', '-ed', '-ilt', '-ns', '-dpr', '-sn', $script:ProductName, '-sv', $script:ReleaseVersion) -FailureMessage 'CycloneDX SBOM generation failed.'
 
 $sbomPath = Join-Path $outputPath 'sbom.cdx.json'
 if (-not (Test-Path -LiteralPath $sbomPath)) {
@@ -42,6 +42,15 @@ $inventoryPath = Join-Path $outputPath 'nuget-dependencies.json'
 if ($LASTEXITCODE -ne 0) {
     throw 'NuGet dependency inventory generation failed.'
 }
+$inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
+$repositoryUriPrefix = $repositoryRoot.Replace('\', '/').TrimEnd('/') + '/'
+foreach ($project in $inventory.projects) {
+    $projectPath = ([string]$project.path).Replace('\', '/')
+    if ($projectPath.StartsWith($repositoryUriPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $project.path = $projectPath.Substring($repositoryUriPrefix.Length)
+    }
+}
+[System.IO.File]::WriteAllText($inventoryPath, ($inventory | ConvertTo-Json -Depth 100) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $outputPath 'THIRD-PARTY-NOTICES.md') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $outputPath 'LICENSE') -Force

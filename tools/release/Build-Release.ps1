@@ -27,18 +27,18 @@ New-Item -ItemType Directory -Path $metadataDirectory -Force | Out-Null
 & (Join-Path $PSScriptRoot 'Test-ReleaseConfiguration.ps1') -RepositoryRoot $repositoryRoot
 
 Write-Host 'Restoring pinned .NET SDK solution inputs...'
-Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('restore', $solution, '--force-evaluate', '-p:RuntimeIdentifier=win-x64') -FailureMessage 'dotnet restore failed.'
+Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('restore', $solution, '--force-evaluate', '--disable-build-servers', '-p:RuntimeIdentifier=win-x64') -FailureMessage 'dotnet restore failed.'
 
 Write-Host 'Building Release/x64 with warnings as errors...'
-Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('build', $solution, '--configuration', $Configuration, '--no-restore', '-p:TreatWarningsAsErrors=true', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet build failed.'
+Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('build', $solution, '--configuration', $Configuration, '--no-restore', '--disable-build-servers', '--maxcpucount:1', '-p:UseSharedCompilation=false', '-p:TreatWarningsAsErrors=true', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet build failed.'
 
 if (-not $SkipTests) {
     Write-Host 'Running the release test suite...'
-    Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('test', $solution, '--configuration', $Configuration, '--no-build', '--logger', 'trx;LogFileName=release-tests.trx', '--results-directory', (Join-Path $releaseRoot 'test-results')) -FailureMessage 'dotnet test failed.'
+    Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('test', $solution, '--configuration', $Configuration, '--no-build', '--disable-build-servers', '--maxcpucount:1', '--logger', 'trx', '--results-directory', (Join-Path $stagingRoot 'test-results')) -FailureMessage 'dotnet test failed.'
 }
 
 Write-Host 'Publishing the self-contained Windows x64 application...'
-Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('publish', $appProject, '--configuration', $Configuration, '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $publishDirectory, '-p:Platform=x64', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet publish failed.'
+Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('publish', $appProject, '--configuration', $Configuration, '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--disable-build-servers', '--maxcpucount:1', '--output', $publishDirectory, '-p:Platform=x64', '-p:UseSharedCompilation=false', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet publish failed.'
 
 Write-Host 'Generating the pinned CycloneDX SBOM and dependency inventory...'
 & (Join-Path $PSScriptRoot 'New-Sbom.ps1') -SolutionPath $solution -OutputDirectory $metadataDirectory

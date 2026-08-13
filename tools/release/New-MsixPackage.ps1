@@ -59,6 +59,7 @@ if (Test-Path -LiteralPath $packagePath) {
 
 $makeAppx = Get-WindowsSdkTool -Name 'makeappx.exe'
 Invoke-NativeCommand -FilePath $makeAppx -ArgumentList @('pack', '/d', $stagingPath, '/p', $packagePath, '/o') -FailureMessage 'makeappx failed to build the MSIX package.'
+Set-ZipEntryTimestamps -Path $packagePath -TimestampUtc $sourceDate
 
 if ($signed) {
     $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
@@ -79,6 +80,7 @@ if ($signed) {
 
     $signTool = Get-WindowsSdkTool -Name 'signtool.exe'
     $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($CertificatePassword)
+    $plainPassword = $null
     try {
         $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
         & $signTool sign /fd SHA256 /f (Resolve-Path -LiteralPath $CertificatePath).Path /p $plainPassword /tr $TimestampUrl /td SHA256 $packagePath
@@ -87,7 +89,7 @@ if ($signed) {
         }
     }
     finally {
-        if ($null -ne $plainPassword) { $plainPassword = $null }
+        $plainPassword = $null
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
     }
 

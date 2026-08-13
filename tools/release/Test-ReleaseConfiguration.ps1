@@ -60,6 +60,14 @@ if ($submoduleEntry -notmatch '^160000 commit [0-9a-f]{40}\s+third_party/TLAH-St
 }
 $submoduleDiff = & git -C $RepositoryRoot diff --submodule=diff --exit-code -- third_party/TLAH-Studio 2>&1
 if ($LASTEXITCODE -ne 0) { Add-Failure "TLAH Studio submodule pin has local changes: $submoduleDiff" }
+$submodulePath = Join-Path $RepositoryRoot 'third_party\TLAH-Studio'
+if (Test-Path -LiteralPath $submodulePath) {
+    $expectedPin = ($submoduleEntry -split '\s+')[2]
+    $actualPin = (& git -C $submodulePath rev-parse HEAD 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualPin -ne $expectedPin) { Add-Failure "TLAH Studio checkout is not at pinned commit $expectedPin." }
+    $submoduleStatus = (& git -C $submodulePath status --porcelain --untracked-files=normal 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $submoduleStatus) { Add-Failure "TLAH Studio checkout is not clean: $submoduleStatus" }
+}
 
 $ownedRoots = @(
     (Join-Path $RepositoryRoot 'installer'),

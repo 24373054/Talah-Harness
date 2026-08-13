@@ -81,19 +81,27 @@ build/release/
   metadata/nuget-dependencies.json
   metadata/THIRD-PARTY-NOTICES.md
   metadata/LICENSE
-  test-results/release-tests.trx
   update-manifest.json
   provenance.json
   Talah-Harness.appinstaller       # signed build with UpdateBaseUri only
   SHA256SUMS
 ```
 
+Per-assembly TRX test evidence is kept under
+`build/release-staging/test-results`; it is CI evidence rather than a distributed
+release payload, because durations and machine details are inherently
+environment-specific.
+
 `provenance.json` binds the source commit, source-derived timestamp, TLAH Studio
 submodule pin, runtime identifier, package hash, SBOM, and signing state.
 `SHA256SUMS` covers every release artifact other than itself. The CycloneDX tool
 version is pinned in `Release.Common.ps1`; non-deterministic SBOM serial numbers
 are removed and its timestamp is derived from the source commit. MSIX inputs have
-their timestamps normalized to the same source date before packaging.
+their timestamps normalized to the same source date before packaging, and the
+MSIX ZIP headers are normalized after `makeappx`. Identical unsigned inputs are
+therefore byte-reproducible. Production Authenticode/RFC 3161 timestamp bytes are
+necessarily unique; the signed result is instead bound by the published checksum
+and provenance record.
 
 No Codex CLI or OpenCode executable is included. Codex 0.147.0 protocol schemas
 and OpenCode 1.18.9 schema/hash provenance remain source inputs. The read-only
