@@ -54,9 +54,10 @@ state. A support workflow can stage and verify a download without installing it:
   -DownloadDirectory "$env:TEMP\TalahHarnessUpdate"
 ```
 
-Replace the URI with the real release origin. The verifier rejects non-HTTPS
-URLs, unsigned declarations, malformed hashes, hash mismatch, invalid
-Authenticode, and publisher mismatch. It downloads to `.partial`, deletes a
+Replace the URI with the real release origin. This support command requires the
+Windows SDK `signtool.exe`. The verifier rejects non-HTTPS URLs, unsigned
+declarations, byte-length/hash mismatch, an invalid MSIX signature, and package
+identity/publisher/version/architecture mismatch. It downloads to `.partial`, deletes a
 failed partial file, and atomically renames only after verification. Installation
 remains an explicit user step.
 

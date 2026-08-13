@@ -5,8 +5,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $DownloadDirectory
 )
 
-Set-StrictMode -Version 2.0
-$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Release.Common.ps1')
 
 $downloadRoot = [System.IO.Path]::GetFullPath($DownloadDirectory)
 if (-not (Test-Path -LiteralPath $downloadRoot)) { New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null }
@@ -38,11 +37,28 @@ $partialPath = $finalPath + '.partial'
 if (Test-Path -LiteralPath $partialPath) { Remove-Item -LiteralPath $partialPath -Force }
 try {
     Invoke-WebRequest -Uri $packageUri -OutFile $partialPath -UseBasicParsing
+    if ((Get-Item -LiteralPath $partialPath).Length -ne [long]$manifest.package.sizeBytes) { throw 'Downloaded package length does not match release metadata.' }
     $actualHash = (Get-FileHash -LiteralPath $partialPath -Algorithm SHA256).Hash
     if ($actualHash -ne [string]$manifest.package.sha256) { throw 'Downloaded package SHA-256 does not match signed release metadata.' }
-    $signature = Get-AuthenticodeSignature -LiteralPath $partialPath
-    if ($signature.Status -ne 'Valid') { throw "Downloaded package Authenticode signature is not valid: $($signature.Status)" }
-    if ($signature.SignerCertificate.Subject -ne [string]$manifest.publisher) { throw 'Downloaded package signer does not match the update manifest publisher.' }
+
+    $signTool = Get-WindowsSdkTool -Name 'signtool.exe'
+    & $signTool verify /pa /v $partialPath | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Downloaded MSIX signature verification failed. signtool exit code: $LASTEXITCODE" }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($partialPath)
+    try {
+        $manifestEntry = $archive.GetEntry('AppxManifest.xml')
+        if ($null -eq $manifestEntry) { throw 'Downloaded MSIX does not contain AppxManifest.xml.' }
+        $reader = [System.IO.StreamReader]::new($manifestEntry.Open())
+        try { [xml]$packageManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    finally { $archive.Dispose() }
+    $identity = $packageManifest.Package.Identity
+    if ($identity.Publisher -ne [string]$manifest.publisher) { throw 'Downloaded package manifest Publisher does not match update metadata.' }
+    if ($identity.Name -ne [string]$manifest.identityName) { throw 'Downloaded package identity does not match update metadata.' }
+    if ($identity.Version -ne [string]$manifest.packageVersion) { throw 'Downloaded package version does not match update metadata.' }
+    if ($identity.ProcessorArchitecture -ne [string]$manifest.architecture) { throw 'Downloaded package architecture does not match update metadata.' }
     Move-Item -LiteralPath $partialPath -Destination $finalPath -Force
 }
 catch {
