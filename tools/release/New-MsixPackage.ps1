@@ -58,7 +58,8 @@ if (Test-Path -LiteralPath $packagePath) {
 }
 
 $makeAppx = Get-WindowsSdkTool -Name 'makeappx.exe'
-Invoke-NativeCommand -FilePath $makeAppx -ArgumentList @('pack', '/d', $stagingPath, '/p', $packagePath, '/o') -FailureMessage 'makeappx failed to build the MSIX package.'
+$makeAppxOutput = @(Invoke-NativeCommand -FilePath $makeAppx -ArgumentList @('pack', '/d', $stagingPath, '/p', $packagePath, '/o') -FailureMessage 'makeappx failed to build the MSIX package.')
+$makeAppxOutput | Select-Object -Last 5 | Out-Host
 Set-ZipEntryTimestamps -Path $packagePath -TimestampUtc $sourceDate
 
 if ($signed) {
@@ -83,7 +84,7 @@ if ($signed) {
     $plainPassword = $null
     try {
         $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
-        & $signTool sign /fd SHA256 /f (Resolve-Path -LiteralPath $CertificatePath).Path /p $plainPassword /tr $TimestampUrl /td SHA256 $packagePath
+        & $signTool sign /fd SHA256 /f (Resolve-Path -LiteralPath $CertificatePath).Path /p $plainPassword /tr $TimestampUrl /td SHA256 $packagePath | Out-Host
         if ($LASTEXITCODE -ne 0) {
             throw "signtool failed to sign the MSIX package. Exit code: $LASTEXITCODE"
         }
@@ -93,7 +94,7 @@ if ($signed) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
     }
 
-    Invoke-NativeCommand -FilePath $signTool -ArgumentList @('verify', '/pa', '/v', $packagePath) -FailureMessage 'Authenticode verification failed for the signed MSIX.'
+    Invoke-NativeCommand -FilePath $signTool -ArgumentList @('verify', '/pa', '/v', $packagePath) -FailureMessage 'Authenticode verification failed for the signed MSIX.' | Out-Host
 }
 
 [pscustomobject]@{

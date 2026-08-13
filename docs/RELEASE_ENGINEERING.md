@@ -16,6 +16,7 @@ allows the two products to coexist.
   `windows-latest` image supplies these tools.
 - Internet access to NuGet.org for restore and the pinned CycloneDX .NET tool
   `6.2.0` on the first build.
+- An interactive Windows user session for the bounded WinUI launch smoke test.
 - For a public build, a code-signing certificate whose subject exactly equals the
   MSIX Publisher, its password, and access to an RFC 3161 timestamp service.
 
@@ -29,8 +30,10 @@ pwsh -NoProfile -File ./tools/release/Build-Release.ps1
 ```
 
 That command restores, builds with warnings as errors, tests, publishes a
-self-contained `win-x64` app, packages an unsigned development MSIX, produces a
-CycloneDX SBOM and NuGet inventory, writes update/provenance JSON, computes
+self-contained `win-x64` app, launches it in a bounded smoke test that requires a
+real `Talah Harness` main window and graceful shutdown, packages an unsigned
+development MSIX, produces a CycloneDX SBOM and NuGet inventory, writes
+update/provenance JSON, computes
 SHA-256 checksums, and revalidates every artifact. It only cleans the validated
 repository-local `build/release` and `build/release-staging` directories.
 

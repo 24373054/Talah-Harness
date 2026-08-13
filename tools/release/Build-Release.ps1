@@ -40,6 +40,9 @@ if (-not $SkipTests) {
 Write-Host 'Publishing the self-contained Windows x64 application...'
 Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('publish', $appProject, '--configuration', $Configuration, '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--disable-build-servers', '--maxcpucount:1', '--output', $publishDirectory, '-p:Platform=x64', '-p:UseSharedCompilation=false', '-p:PublishSingleFile=false', '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet publish failed.'
 
+Write-Host 'Smoke-testing published WinUI startup and graceful shutdown...'
+& (Join-Path $PSScriptRoot 'Test-ApplicationLaunch.ps1') -ExecutablePath (Join-Path $publishDirectory 'Talah.Harness.App.exe')
+
 Write-Host 'Generating the pinned CycloneDX SBOM and dependency inventory...'
 & (Join-Path $PSScriptRoot 'New-Sbom.ps1') -SolutionPath $solution -OutputDirectory $metadataDirectory
 
