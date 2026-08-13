@@ -18,7 +18,7 @@ public sealed class HarnessMigrationException(string message, int sourceVersion,
 
 public sealed class HarnessDatabase
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> MigrationLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _connectionString;
     private readonly int _busyTimeoutMilliseconds;
@@ -70,7 +70,7 @@ public sealed class HarnessDatabase
             {
                 if (existed)
                 {
-                    try { backup = CreateBackup(cancellationToken); }
+                    try { backup = CreateBackup(version, cancellationToken); }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
                         throw new HarnessMigrationException("Could not create the required pre-migration database backup; migration was not attempted.", version, CurrentSchemaVersion, exception);
@@ -80,7 +80,8 @@ public sealed class HarnessDatabase
                 {
                     await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
                     await using System.Data.Common.DbTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-                    await ExecuteAsync(connection, transaction, SchemaV1, cancellationToken).ConfigureAwait(false);
+                    for (int targetVersion = version + 1; targetVersion <= CurrentSchemaVersion; targetVersion++)
+                        await ExecuteAsync(connection, transaction, Migration(targetVersion), cancellationToken).ConfigureAwait(false);
                     await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException and not HarnessMigrationException)
@@ -122,14 +123,14 @@ public sealed class HarnessDatabase
         }
     }
 
-    private string CreateBackup(CancellationToken cancellationToken)
+    private string CreateBackup(int sourceVersion, CancellationToken cancellationToken)
     {
         string directory = Options.BackupDirectory is null
             ? Path.Combine(Path.GetDirectoryName(Options.DatabasePath)!, "backups")
             : Path.GetFullPath(Options.BackupDirectory);
         Directory.CreateDirectory(directory);
         string baseName = Path.GetFileName(Options.DatabasePath);
-        string path = Path.Combine(directory, $"{baseName}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.v0.bak");
+        string path = Path.Combine(directory, $"{baseName}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.v{sourceVersion}.bak");
         cancellationToken.ThrowIfCancellationRequested();
         using var source = new SqliteConnection(_connectionString);
         using var destination = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -166,6 +167,13 @@ public sealed class HarnessDatabase
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private static string Migration(int targetVersion) => targetVersion switch
+    {
+        1 => SchemaV1,
+        2 => SchemaV2,
+        _ => throw new InvalidOperationException($"No database migration is registered for schema v{targetVersion}.")
+    };
 
     private const string SchemaV1 = """
         CREATE TABLE schema_version (
@@ -280,5 +288,24 @@ public sealed class HarnessDatabase
         CREATE INDEX ix_approvals_pending ON approvals(status, created_at);
 
         PRAGMA user_version=1;
+        """;
+
+    private const string SchemaV2 = """
+        CREATE TABLE elicitations (
+            request_id TEXT PRIMARY KEY,
+            adapter_id TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            native_session_id TEXT,
+            native_turn_id TEXT,
+            status TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            response_json TEXT,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT
+        ) STRICT;
+        CREATE INDEX ix_elicitations_pending ON elicitations(status, created_at);
+
+        INSERT INTO schema_version(version, applied_at) VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+        PRAGMA user_version=2;
         """;
 }

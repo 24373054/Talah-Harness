@@ -15,6 +15,11 @@ public sealed record EventAppendResult(long HostSequence, bool Inserted);
 public sealed record StoredAdapterProfile(string AdapterId, string ProfileId, string DisplayName, string DataRoot, bool IsDefault, DateTimeOffset UpdatedAt);
 public sealed record StoredCheckpoint(long CheckpointId, string AdapterId, string ProfileId, string? NativeSessionId, string MarkerKind, JsonElement Marker, DateTimeOffset CreatedAt);
 public sealed record StoredApproval(string ApprovalId, string AdapterId, string ProfileId, string? NativeSessionId, string? NativeTurnId, string Status, JsonElement Request, JsonElement? Response, DateTimeOffset CreatedAt, DateTimeOffset? ResolvedAt);
+public sealed record StoredElicitation(string RequestId, string AdapterId, string ProfileId, string? NativeSessionId, string? NativeTurnId, string Status, JsonElement Request, JsonElement? Response, DateTimeOffset CreatedAt, DateTimeOffset? ResolvedAt);
+public sealed record RecoverySweepResult(int TurnsFailed, int SessionsPaused, int ApprovalsAbandoned, int ElicitationsAbandoned)
+{
+    public bool HadInterruptedWork => TurnsFailed + SessionsPaused + ApprovalsAbandoned + ElicitationsAbandoned > 0;
+}
 
 public sealed class CanonicalRepository(HarnessDatabase database)
 {
@@ -367,7 +372,11 @@ public sealed class CanonicalRepository(HarnessDatabase database)
             INSERT INTO approvals(approval_id,adapter_id,profile_id,native_session_id,native_turn_id,status,request_json,response_json,created_at,resolved_at)
             VALUES($id,$adapter,$profile,$session,$turn,$status,$request,$response,$created,$resolved)
             ON CONFLICT(approval_id) DO UPDATE SET
-                status=CASE WHEN approvals.status='pending' THEN excluded.status ELSE approvals.status END,
+                status=CASE
+                    WHEN approvals.status IN ('resolved','abandoned','indeterminate') THEN approvals.status
+                    WHEN approvals.status='responding' AND excluded.status='pending' THEN approvals.status
+                    ELSE excluded.status
+                END,
                 response_json=COALESCE(approvals.response_json, excluded.response_json),
                 resolved_at=COALESCE(approvals.resolved_at, excluded.resolved_at);
             """;
@@ -408,6 +417,109 @@ public sealed class CanonicalRepository(HarnessDatabase database)
         return result;
     }
 
+    public async Task UpsertElicitationAsync(StoredElicitation elicitation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(elicitation);
+        await using SqliteConnection connection = await _database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO elicitations(request_id,adapter_id,profile_id,native_session_id,native_turn_id,status,request_json,response_json,created_at,resolved_at)
+            VALUES($id,$adapter,$profile,$session,$turn,$status,$request,$response,$created,$resolved)
+            ON CONFLICT(request_id) DO UPDATE SET
+                status=CASE
+                    WHEN elicitations.status IN ('resolved','abandoned','indeterminate') THEN elicitations.status
+                    WHEN elicitations.status='responding' AND excluded.status='pending' THEN elicitations.status
+                    ELSE excluded.status
+                END,
+                response_json=COALESCE(elicitations.response_json, excluded.response_json),
+                resolved_at=COALESCE(elicitations.resolved_at, excluded.resolved_at);
+            """;
+        Add(command, "$id", elicitation.RequestId); Add(command, "$adapter", elicitation.AdapterId); Add(command, "$profile", elicitation.ProfileId);
+        Add(command, "$session", elicitation.NativeSessionId); Add(command, "$turn", elicitation.NativeTurnId); Add(command, "$status", elicitation.Status);
+        Add(command, "$request", elicitation.Request.GetRawText()); Add(command, "$response", elicitation.Response?.GetRawText());
+        Add(command, "$created", Format(elicitation.CreatedAt)); Add(command, "$resolved", elicitation.ResolvedAt is null ? null : Format(elicitation.ResolvedAt.Value));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<StoredElicitation?> GetElicitationAsync(string requestId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestId)) throw new ArgumentException("An elicitation identity is required.", nameof(requestId));
+        await using SqliteConnection connection = await _database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT request_id,adapter_id,profile_id,native_session_id,native_turn_id,status,
+                   request_json,response_json,created_at,resolved_at
+            FROM elicitations WHERE request_id=$id;
+            """;
+        Add(command, "$id", requestId);
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadElicitation(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<StoredElicitation>> ListPendingElicitationsAsync(CancellationToken cancellationToken = default)
+    {
+        await using SqliteConnection connection = await _database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT request_id,adapter_id,profile_id,native_session_id,native_turn_id,status,
+                   request_json,response_json,created_at,resolved_at
+            FROM elicitations WHERE status='pending' ORDER BY created_at;
+            """;
+        var result = new List<StoredElicitation>();
+        await using SqliteDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadElicitation(reader));
+        return result;
+    }
+
+    public async Task<RecoverySweepResult> RecoverInterruptedOperationsAsync(
+        DateTimeOffset recoveredAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using SqliteConnection connection = await _database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using System.Data.Common.DbTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        int turns = await ExecuteRecoveryAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            "UPDATE turns SET status=$failed, completed_at=$at, summary=COALESCE(summary,$summary) WHERE status IN ($running,$waiting);",
+            recoveredAt,
+            command =>
+            {
+                Add(command, "$failed", (int)TurnStatus.Failed);
+                Add(command, "$running", (int)TurnStatus.Running);
+                Add(command, "$waiting", (int)TurnStatus.WaitingForApproval);
+                Add(command, "$summary", "Interrupted by a previous host shutdown or crash; resume the session to continue safely.");
+            },
+            cancellationToken).ConfigureAwait(false);
+        int sessions = await ExecuteRecoveryAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            "UPDATE sessions SET status=$paused, updated_at=$at WHERE status IN ($running,$waiting);",
+            recoveredAt,
+            command =>
+            {
+                Add(command, "$paused", (int)SessionStatus.Paused);
+                Add(command, "$running", (int)SessionStatus.Running);
+                Add(command, "$waiting", (int)SessionStatus.WaitingForApproval);
+            },
+            cancellationToken).ConfigureAwait(false);
+        int approvals = await ExecuteRecoveryAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            "UPDATE approvals SET status='abandoned', resolved_at=$at WHERE status IN ('pending','responding');",
+            recoveredAt,
+            null,
+            cancellationToken).ConfigureAwait(false);
+        int elicitations = await ExecuteRecoveryAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            "UPDATE elicitations SET status='abandoned', resolved_at=$at WHERE status IN ('pending','responding');",
+            recoveredAt,
+            null,
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new RecoverySweepResult(turns, sessions, approvals, elicitations);
+    }
+
     private static StoredSession ReadSession(SqliteDataReader reader)
     {
         var sessionRef = new SessionRef(reader.GetString(1), reader.GetString(2), reader.GetString(3),
@@ -432,6 +544,39 @@ public sealed class CanonicalRepository(HarnessDatabase database)
             response,
             Parse(reader.GetString(8)),
             reader.IsDBNull(9) ? null : Parse(reader.GetString(9)));
+    }
+
+    private static StoredElicitation ReadElicitation(SqliteDataReader reader)
+    {
+        JsonElement request = JsonSerializer.Deserialize<JsonElement>(reader.GetString(6), JsonOptions);
+        JsonElement? response = reader.IsDBNull(7) ? null : JsonSerializer.Deserialize<JsonElement>(reader.GetString(7), JsonOptions);
+        return new StoredElicitation(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetString(5),
+            request,
+            response,
+            Parse(reader.GetString(8)),
+            reader.IsDBNull(9) ? null : Parse(reader.GetString(9)));
+    }
+
+    private static async Task<int> ExecuteRecoveryAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sql,
+        DateTimeOffset recoveredAt,
+        Action<SqliteCommand>? configure,
+        CancellationToken cancellationToken)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        Add(command, "$at", Format(recoveredAt));
+        configure?.Invoke(command);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static ResultPage<T> Page<T>(List<T> result, int pageSize, int offset)

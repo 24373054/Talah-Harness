@@ -91,4 +91,19 @@ public sealed class OpenCodeSseTests
             return Assert.Single(normalizer.Normalize(new OpenCodeSseEvent(null, null, json, root)));
         }
     }
+
+    [Fact]
+    public void NormalizerPreservesStableDistinctIdentityForMultipleCanonicalEvents()
+    {
+        using var document = JsonDocument.Parse("""
+            {"type":"message.updated","properties":{"sessionID":"s","info":{"id":"m","error":{"name":"failure"},"tokens":{"input":1,"output":2}}}}
+            """);
+        var normalizer = new OpenCodeEventNormalizer("profile");
+        IReadOnlyList<KernelEvent> events = normalizer.Normalize(
+            new OpenCodeSseEvent("sse-42", null, document.RootElement.GetRawText(), document.RootElement.Clone()));
+
+        Assert.Equal(2, events.Count);
+        Assert.All(events, item => Assert.StartsWith("sse-42:", item.NativeEventId, StringComparison.Ordinal));
+        Assert.Equal(events.Count, events.Select(item => item.NativeEventId).Distinct(StringComparer.Ordinal).Count());
+    }
 }

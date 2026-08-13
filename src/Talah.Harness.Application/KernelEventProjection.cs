@@ -14,10 +14,11 @@ internal sealed class KernelEventProjection(CanonicalRepository repository)
     public async Task<StoredCanonicalEvent> PersistAsync(KernelEvent kernelEvent, CancellationToken cancellationToken)
     {
         Validate(kernelEvent);
-        string nativeEventId = CreateIdentity(kernelEvent);
-        EventAppendResult result = await _repository.AppendEventAsync(nativeEventId, kernelEvent, cancellationToken).ConfigureAwait(false);
-        await ApplyAsync(kernelEvent, cancellationToken).ConfigureAwait(false);
-        return new StoredCanonicalEvent(result.HostSequence, nativeEventId, kernelEvent);
+        KernelEvent sanitized = SensitiveEventSanitizer.Sanitize(kernelEvent);
+        string nativeEventId = CreateIdentity(sanitized);
+        EventAppendResult result = await _repository.AppendEventAsync(nativeEventId, sanitized, cancellationToken).ConfigureAwait(false);
+        await ApplyAsync(sanitized, cancellationToken).ConfigureAwait(false);
+        return new StoredCanonicalEvent(result.HostSequence, nativeEventId, sanitized);
     }
 
     public async Task ApplyAsync(KernelEvent kernelEvent, CancellationToken cancellationToken)
@@ -43,6 +44,19 @@ internal sealed class KernelEventProjection(CanonicalRepository repository)
                     kernelEvent.NativeTurnId,
                     "pending",
                     JsonSerializer.SerializeToElement(permission.Request, JsonOptions),
+                    null,
+                    kernelEvent.Timestamp,
+                    null), cancellationToken).ConfigureAwait(false);
+                break;
+            case ElicitationEventData elicitation:
+                await _repository.UpsertElicitationAsync(new StoredElicitation(
+                    elicitation.Request.RequestId,
+                    kernelEvent.AdapterId,
+                    kernelEvent.ProfileId,
+                    kernelEvent.NativeSessionId,
+                    kernelEvent.NativeTurnId,
+                    "pending",
+                    JsonSerializer.SerializeToElement(elicitation.Request, JsonOptions),
                     null,
                     kernelEvent.Timestamp,
                     null), cancellationToken).ConfigureAwait(false);
@@ -74,8 +88,11 @@ internal sealed class KernelEventProjection(CanonicalRepository repository)
 
     private static string CreateIdentity(KernelEvent kernelEvent)
     {
-        string serialized = JsonSerializer.Serialize(kernelEvent, JsonOptions);
-        return "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(serialized))).ToLowerInvariant();
+        string identityMaterial = string.IsNullOrWhiteSpace(kernelEvent.NativeEventId)
+            ? JsonSerializer.Serialize(kernelEvent, JsonOptions)
+            : string.Join('\n', kernelEvent.AdapterId, kernelEvent.ProfileId, kernelEvent.NativeEventId);
+        string prefix = string.IsNullOrWhiteSpace(kernelEvent.NativeEventId) ? "event-sha256:" : "native-sha256:";
+        return prefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identityMaterial))).ToLowerInvariant();
     }
 
     private static bool IsTerminal(TurnStatus status) =>

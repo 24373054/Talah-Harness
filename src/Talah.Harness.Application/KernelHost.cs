@@ -15,6 +15,8 @@ public sealed record HostedKernelSnapshot(
     string? EventPumpFailure);
 
 public sealed record DurableKernelEvent(long HostSequence, string NativeEventId, KernelEvent Event);
+public sealed record DurablePermissionRequest(PermissionRequest Request, string Status, DateTimeOffset CreatedAt);
+public sealed record DurableElicitationRequest(ElicitationRequest Request, string Status, DateTimeOffset CreatedAt);
 
 public sealed class KernelHost : IAsyncDisposable
 {
@@ -30,6 +32,8 @@ public sealed class KernelHost : IAsyncDisposable
     private readonly ChangeSignal _eventChanged = new();
     private bool _initialized;
     private bool _disposed;
+
+    public RecoverySweepResult? LastRecoverySweep { get; private set; }
 
     public KernelHost(
         IEnumerable<IKernelAdapterFactory> factories,
@@ -55,6 +59,7 @@ public sealed class KernelHost : IAsyncDisposable
             if (_initialized) throw new InvalidOperationException("The kernel host is already initialized.");
             DatabaseInitializationResult result = await _database.InitializeAsync(cancellationToken).ConfigureAwait(false);
             await RepairEventProjectionsAsync(cancellationToken).ConfigureAwait(false);
+            LastRecoverySweep = await _repository.RecoverInterruptedOperationsAsync(DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
             _initialized = true;
             return result;
         }
@@ -115,16 +120,43 @@ public sealed class KernelHost : IAsyncDisposable
         try
         {
             if (!_kernels.TryRemove(key, out HostedKernel? hosted)) return;
-            hosted.Cancellation.Cancel();
-            if (hosted.EventPump is not null)
+            Exception? disposalFailure = null;
+            try
             {
-                try { await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false); }
-                catch (OperationCanceledException) when (hosted.Cancellation.IsCancellationRequested) { }
-                catch (TimeoutException) { }
+                await hosted.Adapter.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                disposalFailure = exception;
             }
 
-            await hosted.Adapter.DisposeAsync().ConfigureAwait(false);
+            if (hosted.EventPump is not null)
+            {
+                try
+                {
+                    await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    hosted.Cancellation.Cancel();
+                    try { await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception) { }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    hosted.Cancellation.Cancel();
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // Event-pump failures are already retained as redacted profile diagnostics.
+                }
+            }
+
+            hosted.Cancellation.Cancel();
             hosted.Cancellation.Dispose();
+            if (disposalFailure is not null)
+                throw new InvalidOperationException("The kernel adapter did not shut down cleanly; inspect redacted diagnostics.", disposalFailure);
         }
         finally
         {
@@ -250,7 +282,7 @@ public sealed class KernelHost : IAsyncDisposable
 
     public async Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(input);
+        TurnInputPolicy.Validate(input);
         StoredSession stored = await RequireStoredSessionAsync(session, cancellationToken).ConfigureAwait(false);
         WorkspaceDescriptor workspace = await RequireWorkspaceAsync(stored.Summary.Session.WorkspaceId, cancellationToken).ConfigureAwait(false);
         _workspacePolicy.ValidateReferencedPaths(workspace, input.ReferencedPaths);
@@ -262,6 +294,7 @@ public sealed class KernelHost : IAsyncDisposable
 
     public async Task SteerTurnAsync(SessionRef session, string nativeTurnId, TurnInput input, CancellationToken cancellationToken = default)
     {
+        TurnInputPolicy.Validate(input);
         StoredSession stored = await RequireStoredSessionAsync(session, cancellationToken).ConfigureAwait(false);
         WorkspaceDescriptor workspace = await RequireWorkspaceAsync(stored.Summary.Session.WorkspaceId, cancellationToken).ConfigureAwait(false);
         _workspacePolicy.ValidateReferencedPaths(workspace, input.ReferencedPaths);
@@ -281,17 +314,93 @@ public sealed class KernelHost : IAsyncDisposable
             throw new InvalidOperationException("The permission request belongs to a different kernel profile.");
         if (!string.Equals(pending.Status, "pending", StringComparison.Ordinal))
             throw new InvalidOperationException("The permission request was already resolved.");
-        await Get(key).RespondToPermissionAsync(response, cancellationToken).ConfigureAwait(false);
+        JsonElement responseJson = JsonSerializer.SerializeToElement(response, JsonOptions);
+        await _repository.UpsertApprovalAsync(pending with
+        {
+            Status = "responding",
+            Response = responseJson
+        }, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await Get(key).RespondToPermissionAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await _repository.UpsertApprovalAsync(pending with
+            {
+                Status = "indeterminate",
+                Response = responseJson,
+                ResolvedAt = DateTimeOffset.UtcNow
+            }, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
         await _repository.UpsertApprovalAsync(pending with
         {
             Status = "resolved",
-            Response = JsonSerializer.SerializeToElement(response, JsonOptions),
+            Response = responseJson,
             ResolvedAt = DateTimeOffset.UtcNow
-        }, cancellationToken).ConfigureAwait(false);
+        }, CancellationToken.None).ConfigureAwait(false);
     }
 
-    public Task RespondToElicitationAsync(KernelProfileKey key, ElicitationResponse response, CancellationToken cancellationToken = default) =>
-        Get(key).RespondToElicitationAsync(response, cancellationToken);
+    public async Task RespondToElicitationAsync(KernelProfileKey key, ElicitationResponse response, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        StoredElicitation pending = await _repository.GetElicitationAsync(response.RequestId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"Elicitation request '{response.RequestId}' is not in the durable interaction ledger.");
+        if (!string.Equals(pending.AdapterId, key.AdapterId, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(pending.ProfileId, key.ProfileId, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The elicitation request belongs to a different kernel profile.");
+        if (!string.Equals(pending.Status, "pending", StringComparison.Ordinal))
+            throw new InvalidOperationException("The elicitation request was already resolved.");
+        JsonElement responseJson = JsonSerializer.SerializeToElement(response, JsonOptions);
+        await _repository.UpsertElicitationAsync(pending with
+        {
+            Status = "responding",
+            Response = responseJson
+        }, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await Get(key).RespondToElicitationAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await _repository.UpsertElicitationAsync(pending with
+            {
+                Status = "indeterminate",
+                Response = responseJson,
+                ResolvedAt = DateTimeOffset.UtcNow
+            }, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        await _repository.UpsertElicitationAsync(pending with
+        {
+            Status = "resolved",
+            Response = responseJson,
+            ResolvedAt = DateTimeOffset.UtcNow
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<DurablePermissionRequest>> GetPendingPermissionRequestsAsync(CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<StoredApproval> stored = await _repository.ListPendingApprovalsAsync(cancellationToken).ConfigureAwait(false);
+        return stored.Select(item => new DurablePermissionRequest(
+            item.Request.Deserialize<PermissionRequest>(JsonOptions)
+                ?? throw new InvalidDataException($"Stored permission request '{item.ApprovalId}' is invalid."),
+            item.Status,
+            item.CreatedAt)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DurableElicitationRequest>> GetPendingElicitationRequestsAsync(CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<StoredElicitation> stored = await _repository.ListPendingElicitationsAsync(cancellationToken).ConfigureAwait(false);
+        return stored.Select(item => new DurableElicitationRequest(
+            item.Request.Deserialize<ElicitationRequest>(JsonOptions)
+                ?? throw new InvalidDataException($"Stored elicitation request '{item.RequestId}' is invalid."),
+            item.Status,
+            item.CreatedAt)).ToArray();
+    }
 
     public async Task<ResultPage<KernelItem>> ReadHistoryAsync(SessionRef session, PageRequest page, CancellationToken cancellationToken = default)
     {
@@ -336,13 +445,13 @@ public sealed class KernelHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
-        _shutdown.Cancel();
         foreach (KernelProfileKey? key in _kernels.Keys.ToArray())
         {
             try { await StopProfileAsync(key).ConfigureAwait(false); }
             catch (Exception) { }
         }
 
+        _shutdown.Cancel();
         _disposed = true;
         _shutdown.Dispose();
         _lifecycle.Dispose();

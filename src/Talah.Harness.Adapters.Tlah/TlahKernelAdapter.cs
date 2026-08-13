@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Talah.Harness.Contracts;
@@ -622,6 +623,9 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapt
 
     private static JsonElement ParseJson(string json)
     {
+        const int maximumBytes = 1024 * 1024;
+        if (json.Length > maximumBytes || Encoding.UTF8.GetByteCount(json) > maximumBytes)
+            return JsonSerializer.SerializeToElement(new { nativeDataOmitted = true, characterCount = json.Length, maximumBytes });
         try { return JsonSerializer.Deserialize<JsonElement>(json); }
         catch (JsonException) { return JsonSerializer.SerializeToElement(new { malformedNativeData = true }); }
     }

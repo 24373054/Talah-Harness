@@ -77,5 +77,6 @@ public sealed record KernelEvent(
     DateTimeOffset Timestamp,
     KernelEventKind Kind,
     KernelEventData Data,
-    JsonElement? VendorData = null);
+    JsonElement? VendorData = null,
+    string? NativeEventId = null);
 

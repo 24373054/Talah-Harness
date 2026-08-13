@@ -20,6 +20,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         });
     private readonly ConcurrentDictionary<string, PendingInteraction> _interactions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _diffs = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _writableRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
     private long _sequence;
     private int _initialized;
@@ -65,7 +66,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         new SecurityDescriptor(
             SecurityEnforcementKind.OperatingSystemSandbox,
             "Codex App Server",
-            [],
+            _writableRoots.Keys.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
             NetworkRestricted: false,
             ProcessRestricted: false,
             IsVerifiedByHost: false,
@@ -285,6 +286,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
                 .ConfigureAwait(false);
             summary = summary with { Title = request.Title! };
         }
+
+        TrackWorkspace(request.Workspace);
 
         return summary;
     }
@@ -775,6 +778,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         DateTimeOffset created = FromUnixSeconds(GetInt64(thread, "createdAt")) ?? DateTimeOffset.UtcNow;
         DateTimeOffset updated = FromUnixSeconds(GetInt64(thread, "updatedAt")) ?? created;
         string title = requestedTitle ?? GetString(thread, "name") ?? GetString(thread, "preview") ?? "Codex thread";
+        string? cwd = GetString(thread, "cwd");
+        if (!string.IsNullOrWhiteSpace(cwd)) _writableRoots.TryAdd(Path.GetFullPath(cwd), 0);
         return new KernelSessionSummary(
             Session(id, GetString(thread, "forkedFromId") ?? GetString(thread, "parentThreadId")),
             title,
@@ -784,10 +789,16 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
             GetString(thread, "preview"),
             new Dictionary<string, string>
             {
-                ["cwd"] = GetString(thread, "cwd") ?? string.Empty,
+                ["cwd"] = cwd ?? string.Empty,
                 ["modelProvider"] = GetString(thread, "modelProvider") ?? string.Empty,
                 ["cliVersion"] = GetString(thread, "cliVersion") ?? string.Empty
             });
+    }
+
+    private void TrackWorkspace(WorkspaceDescriptor workspace)
+    {
+        foreach (string root in workspace.AdditionalRoots.Prepend(workspace.RootPath))
+            _writableRoots.TryAdd(Path.GetFullPath(root), 0);
     }
 
     private static KernelTurn MapTurn(SessionRef session, JsonElement turn)

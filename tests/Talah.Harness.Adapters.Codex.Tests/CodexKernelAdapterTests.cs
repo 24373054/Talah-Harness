@@ -75,6 +75,7 @@ public sealed class CodexKernelAdapterTests
         Assert.Equal("t-fork", forked.Session.NativeSessionId);
         Assert.IsType<TextContentBlock>(Assert.Single(history.Items).Content.Single());
         Assert.Contains("thread/archive", calls);
+        Assert.Contains(Path.GetFullPath("C:/work"), adapter.Descriptor.Security.WritableRoots, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

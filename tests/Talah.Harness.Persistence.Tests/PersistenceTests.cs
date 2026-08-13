@@ -9,21 +9,21 @@ namespace Talah.Harness.Persistence.Tests;
 public sealed class PersistenceTests
 {
     [Fact]
-    public async Task EmptyDatabase_MigratesToV1WithWalAndIntegrity()
+    public async Task EmptyDatabase_MigratesToCurrentSchemaWithWalAndIntegrity()
     {
         using var temp = new TemporaryDirectory();
         var database = CreateDatabase(temp);
         var result = await database.InitializeAsync();
-        Assert.Equal(1, result.SchemaVersion);
+        Assert.Equal(HarnessDatabase.CurrentSchemaVersion, result.SchemaVersion);
         Assert.Equal("ok", result.IntegrityResult);
         Assert.Null(result.BackupPath);
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(1L, await ScalarAsync(connection, "PRAGMA user_version;"));
+        Assert.Equal((long)HarnessDatabase.CurrentSchemaVersion, await ScalarAsync(connection, "PRAGMA user_version;"));
         Assert.Equal("wal", ((string)(await ScalarAsync(connection, "PRAGMA journal_mode;"))!).ToLowerInvariant());
         var tables = Convert.ToInt64(await ScalarAsync(connection,
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions','turns','items','canonical_events','adapter_profiles','checkpoints','approvals','schema_version');"), System.Globalization.CultureInfo.InvariantCulture);
-        Assert.Equal(8, tables);
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions','turns','items','canonical_events','adapter_profiles','workspaces','checkpoints','approvals','elicitations','schema_version');"), System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(10, tables);
     }
 
     [Fact]
@@ -100,6 +100,67 @@ public sealed class PersistenceTests
         await using var backup = new SqliteConnection($"Data Source={result.BackupPath};Mode=ReadOnly;Pooling=False");
         await backup.OpenAsync();
         Assert.Equal("preserve-me", await ScalarAsync(backup, "SELECT value FROM legacy_marker;"));
+    }
+
+    [Fact]
+    public async Task ExistingV1Database_IsBackedUpAndMigratedForwardWithoutLosingData()
+    {
+        using var temp = new TemporaryDirectory();
+        var path = Path.Combine(temp.Path, "store.db");
+        await using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
+                INSERT INTO schema_version(version,applied_at) VALUES(1,'2026-01-01T00:00:00Z');
+                CREATE TABLE preserved(value TEXT NOT NULL) STRICT;
+                INSERT INTO preserved(value) VALUES('keep-v1');
+                PRAGMA user_version=1;
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var result = await CreateDatabase(temp).InitializeAsync();
+        Assert.Equal(2, result.SchemaVersion);
+        Assert.NotNull(result.BackupPath);
+        await using var migrated = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
+        await migrated.OpenAsync();
+        Assert.Equal("keep-v1", await ScalarAsync(migrated, "SELECT value FROM preserved;"));
+        Assert.Equal(1L, await ScalarAsync(migrated, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='elicitations';"));
+        Assert.Equal(2L, await ScalarAsync(migrated, "PRAGMA user_version;"));
+    }
+
+    [Fact]
+    public async Task FailedForwardMigrationRollsBackAndLeavesReadableBackup()
+    {
+        using var temp = new TemporaryDirectory();
+        var path = Path.Combine(temp.Path, "store.db");
+        await using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
+                INSERT INTO schema_version(version,applied_at) VALUES(1,'2026-01-01T00:00:00Z');
+                CREATE TABLE elicitations(conflict TEXT);
+                CREATE TABLE preserved(value TEXT);
+                INSERT INTO preserved(value) VALUES('recoverable');
+                PRAGMA user_version=1;
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        HarnessMigrationException error = await Assert.ThrowsAsync<HarnessMigrationException>(() => CreateDatabase(temp).InitializeAsync());
+        Assert.Equal(1, error.SourceVersion);
+        Assert.Equal(2, error.TargetVersion);
+        string backupPath = Assert.Single(Directory.GetFiles(Path.Combine(temp.Path, "backups"), "*.v1.bak"));
+        await using var backup = new SqliteConnection($"Data Source={backupPath};Mode=ReadOnly;Pooling=False");
+        await backup.OpenAsync();
+        Assert.Equal("recoverable", await ScalarAsync(backup, "SELECT value FROM preserved;"));
+        await using var original = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
+        await original.OpenAsync();
+        Assert.Equal(1L, await ScalarAsync(original, "PRAGMA user_version;"));
     }
 
     [Fact]
@@ -184,6 +245,43 @@ public sealed class PersistenceTests
     }
 
     [Fact]
+    public async Task InteractionStateMachinePreventsReplayAndRecoverySweepAbandonsInterruptedWork()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = CreateDatabase(temp);
+        await database.InitializeAsync();
+        var repository = new CanonicalRepository(database);
+        var now = DateTimeOffset.UtcNow;
+        var running = Session("running", now) with { Status = SessionStatus.Running };
+        long hostSessionId = await repository.UpsertSessionAsync(running);
+        await repository.UpsertTurnAsync(hostSessionId, "turn", TurnStatus.WaitingForApproval, now);
+        JsonElement permissionRequest = JsonSerializer.SerializeToElement(new { tool = "shell" });
+        JsonElement permissionResponse = JsonSerializer.SerializeToElement(new { choice = "deny" });
+        var approval = new StoredApproval("approval", "codex", "default", "running", "turn", "pending", permissionRequest, null, now, null);
+        await repository.UpsertApprovalAsync(approval);
+        await repository.UpsertApprovalAsync(approval with { Status = "responding", Response = permissionResponse });
+        await repository.UpsertApprovalAsync(approval); // Original request replay cannot return it to pending.
+        Assert.Equal("responding", (await repository.GetApprovalAsync("approval"))!.Status);
+
+        JsonElement elicitationRequest = JsonSerializer.SerializeToElement(new { prompt = "value" });
+        var elicitation = new StoredElicitation("question", "codex", "default", "running", "turn", "pending", elicitationRequest, null, now, null);
+        await repository.UpsertElicitationAsync(elicitation);
+        Assert.Single(await repository.ListPendingElicitationsAsync());
+
+        RecoverySweepResult result = await repository.RecoverInterruptedOperationsAsync(now.AddMinutes(1));
+        Assert.Equal(new RecoverySweepResult(1, 1, 1, 1), result);
+        Assert.True(result.HadInterruptedWork);
+        Assert.Equal("abandoned", (await repository.GetApprovalAsync("approval"))!.Status);
+        Assert.Equal("abandoned", (await repository.GetElicitationAsync("question"))!.Status);
+        Assert.Empty(await repository.ListPendingApprovalsAsync());
+        Assert.Empty(await repository.ListPendingElicitationsAsync());
+
+        await using SqliteConnection connection = await database.OpenConnectionAsync();
+        Assert.Equal((long)TurnStatus.Failed, await ScalarAsync(connection, "SELECT status FROM turns WHERE native_turn_id='turn';"));
+        Assert.Equal((long)SessionStatus.Paused, await ScalarAsync(connection, "SELECT status FROM sessions WHERE native_session_id='running';"));
+    }
+
+    [Fact]
     public async Task EventsAfterSequenceSupportDurableCatchUp()
     {
         using var temp = new TemporaryDirectory();
@@ -208,13 +306,13 @@ public sealed class PersistenceTests
         {
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA user_version=2;";
+            command.CommandText = "PRAGMA user_version=3;";
             await command.ExecuteNonQueryAsync();
         }
 
         var error = await Assert.ThrowsAsync<HarnessMigrationException>(() => CreateDatabase(temp).InitializeAsync());
-        Assert.Equal(2, error.SourceVersion);
-        Assert.Equal(1, error.TargetVersion);
+        Assert.Equal(3, error.SourceVersion);
+        Assert.Equal(2, error.TargetVersion);
         Assert.Contains("newer", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 

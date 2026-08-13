@@ -90,9 +90,14 @@ public sealed class OpenCodeEventNormalizer(string profileId)
 
         return events;
 
-        void Add(KernelEventKind kind, KernelEventData data) => events.Add(new KernelEvent(
-            OpenCodeAdapter.Id, _profileId, sessionId, messageId, itemId,
-            Interlocked.Increment(ref _sequence), DateTimeOffset.UtcNow, kind, data, root.Clone()));
+        void Add(KernelEventKind kind, KernelEventData data)
+        {
+            string? sourceIdentity = source.Id ?? String(root, "id");
+            string? nativeEventId = sourceIdentity is null ? null : $"{sourceIdentity}:{events.Count}:{kind}";
+            events.Add(new KernelEvent(
+                OpenCodeAdapter.Id, _profileId, sessionId, messageId, itemId,
+                Interlocked.Increment(ref _sequence), DateTimeOffset.UtcNow, kind, data, root.Clone(), nativeEventId));
+        }
 
         void AddPart(JsonElement value)
         {

@@ -67,6 +67,24 @@ public sealed class KernelHostTests
     }
 
     [Fact]
+    public async Task TurnRejectsUnsupportedOrUnboundedUserInputBeforeAdapterCall()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        var unsupported = new TurnInput([
+            new NoticeContentBlock("not-user-input", "notice", DiagnosticSeverity.Information)
+        ]);
+        var oversized = new TurnInput([new TextContentBlock(new string('x', 8 * 1024 * 1024 + 1))]);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Host.StartTurnAsync(session.Session, unsupported, new TurnOptions(null, null, null, null)));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Host.StartTurnAsync(session.Session, oversized, new TurnOptions(null, null, null, null)));
+        Assert.Equal(0, fixture.Adapter.StartTurnCalls);
+    }
+
+    [Fact]
     public async Task EventsAreDurableOrderedAndReplayableWithoutAHotSubscriber()
     {
         await using var fixture = new HostFixture();
@@ -122,6 +140,108 @@ public sealed class KernelHostTests
     }
 
     [Fact]
+    public async Task FailedPermissionDeliveryIsMarkedIndeterminateAndCannotBeReplayedDestructively()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        var request = new PermissionRequest(
+            "permission-failure", session.Session, "turn-1", "command", "Run command", null,
+            [new ResourceImpact("process", fixture.Workspace, "execute", "high")],
+            [new PermissionChoice("deny", PermissionDecisionKind.Deny, "Deny", null)]);
+        await fixture.Adapter.EmitAsync(fixture.Adapter.MakeEvent(
+            session.Session, 4, KernelEventKind.PermissionRequested, new PermissionEventData(request), nativeTurnId: "turn-1"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => (await fixture.Repository.ListPendingApprovalsAsync()).Count == 1, timeout.Token);
+        fixture.Adapter.FailPermissionResponse = true;
+        var response = new PermissionResponse("permission-failure", "deny");
+
+        await Assert.ThrowsAsync<IOException>(() => fixture.Host.RespondToPermissionAsync(fixture.Key, response, timeout.Token));
+        StoredApproval stored = (await fixture.Repository.GetApprovalAsync("permission-failure", timeout.Token))!;
+        Assert.Equal("indeterminate", stored.Status);
+        Assert.Equal("deny", stored.Response!.Value.GetProperty("choiceId").GetString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Host.RespondToPermissionAsync(fixture.Key, response, timeout.Token));
+    }
+
+    [Fact]
+    public async Task ElicitationIsDurableAndResolvedThroughTwoPhaseLedger()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        JsonElement schema = JsonSerializer.SerializeToElement(new { type = "string" });
+        var request = new ElicitationRequest("question-1", session.Session, "Input", "Provide a value", schema);
+        await fixture.Adapter.EmitAsync(fixture.Adapter.MakeEvent(
+            session.Session, 5, KernelEventKind.ElicitationRequested, new ElicitationEventData(request), nativeTurnId: "turn-1"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => (await fixture.Host.GetPendingElicitationRequestsAsync(timeout.Token)).Count == 1, timeout.Token);
+        JsonElement value = JsonSerializer.SerializeToElement("answer");
+        var response = new ElicitationResponse("question-1", false, value);
+
+        await fixture.Host.RespondToElicitationAsync(fixture.Key, response, timeout.Token);
+
+        Assert.Equal(response, fixture.Adapter.ElicitationResponse);
+        Assert.Empty(await fixture.Host.GetPendingElicitationRequestsAsync(timeout.Token));
+        Assert.Equal("resolved", (await fixture.Repository.GetElicitationAsync("question-1", timeout.Token))!.Status);
+    }
+
+    [Fact]
+    public async Task StableNativeEventIdentityDeduplicatesReconnectReplay()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        KernelEvent first = fixture.Adapter.MakeEvent(session.Session, 10, KernelEventKind.Diagnostic,
+            new DiagnosticEventData(new KernelDiagnostic("replay", DiagnosticSeverity.Information, "first")), nativeEventId: "vendor-42");
+        KernelEvent replay = first with { Sequence = 99, Timestamp = first.Timestamp.AddSeconds(2) };
+        await fixture.Adapter.EmitAsync(first);
+        await fixture.Adapter.EmitAsync(replay);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => (await fixture.Repository.GetEventsAfterAsync(0, 20)).Count >= 2, timeout.Token);
+
+        IReadOnlyList<StoredCanonicalEvent> events = await fixture.Repository.GetEventsAfterAsync(0, 20, cancellationToken: timeout.Token);
+        Assert.Single(events, item => item.Event.NativeEventId == "vendor-42");
+    }
+
+    [Fact]
+    public async Task VendorPayloadSecretsAreRedactedBeforeDurablePersistence()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        const string apiKey = "sk-abcdefghijklmnopqrstuv";
+        const string bearer = "Bearer credential-that-must-not-persist";
+        JsonElement vendor = JsonSerializer.SerializeToElement(new
+        {
+            authorization = bearer,
+            nested = new { api_key = apiKey, tokens = 12, note = bearer }
+        });
+        KernelEvent kernelEvent = fixture.Adapter.MakeEvent(
+            session.Session,
+            11,
+            KernelEventKind.Diagnostic,
+            new DiagnosticEventData(new KernelDiagnostic(
+                "vendor",
+                DiagnosticSeverity.Information,
+                "safe",
+                VendorData: vendor)),
+            nativeEventId: "redaction-event") with { VendorData = vendor };
+        await fixture.Adapter.EmitAsync(kernelEvent);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => (await fixture.Repository.GetEventsAfterAsync(0, 20)).Any(item => item.Event.NativeEventId == "redaction-event"), timeout.Token);
+
+        StoredCanonicalEvent stored = Assert.Single(
+            await fixture.Repository.GetEventsAfterAsync(0, 20, cancellationToken: timeout.Token),
+            item => item.Event.NativeEventId == "redaction-event");
+        string serialized = JsonSerializer.Serialize(stored.Event);
+        Assert.DoesNotContain(apiKey, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("credential-that-must-not-persist", serialized, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", serialized, StringComparison.Ordinal);
+        Assert.Equal(12, stored.Event.VendorData!.Value.GetProperty("nested").GetProperty("tokens").GetInt32());
+    }
+
+    [Fact]
     public async Task HistoryAndArchiveAreProjectedIntoCanonicalStore()
     {
         await using var fixture = new HostFixture();
@@ -135,6 +255,30 @@ public sealed class KernelHostTests
         await fixture.Host.ArchiveSessionAsync(session.Session);
         Assert.True(fixture.Adapter.Archived);
         Assert.Equal(SessionStatus.Archived, (await fixture.Repository.GetSessionAsync(session.Session))!.Summary.Status);
+    }
+
+    [Fact]
+    public async Task GracefulProfileStopDrainsTerminalEventsBeforeStoppingPump()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+        KernelTurn turn = await fixture.Host.StartTurnAsync(
+            session.Session,
+            new TurnInput([new TextContentBlock("work")]),
+            new TurnOptions(null, null, null, null));
+        fixture.Adapter.EventOnDispose = fixture.Adapter.MakeEvent(
+            session.Session,
+            90,
+            KernelEventKind.TurnCancelled,
+            new TurnEventData(TurnStatus.Cancelled),
+            nativeTurnId: turn.NativeTurnId,
+            nativeEventId: "dispose-terminal");
+
+        await fixture.Host.StopProfileAsync(fixture.Key);
+
+        IReadOnlyList<StoredCanonicalEvent> events = await fixture.Repository.GetEventsAfterAsync(0, 20);
+        Assert.Single(events, item => item.Event.NativeEventId == "dispose-terminal" && item.Event.Kind == KernelEventKind.TurnCancelled);
     }
 
     [Fact]
@@ -229,6 +373,9 @@ public sealed class KernelHostTests
         public int StartTurnCalls { get; private set; }
         public bool Archived { get; private set; }
         public PermissionResponse? PermissionResponse { get; private set; }
+        public ElicitationResponse? ElicitationResponse { get; private set; }
+        public bool FailPermissionResponse { get; set; }
+        public KernelEvent? EventOnDispose { get; set; }
         public KernelItem HistoryItem { get; } = new(
             "item-1", KernelItemKind.AssistantMessage, KernelItemStatus.Completed, "Answer",
             [new TextContentBlock("real mapped content")], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
@@ -287,11 +434,16 @@ public sealed class KernelHostTests
         public Task CancelTurnAsync(SessionRef session, string nativeTurnId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RespondToPermissionAsync(PermissionResponse response, CancellationToken cancellationToken = default)
         {
+            if (FailPermissionResponse) throw new IOException("Simulated uncertain transport failure.");
             PermissionResponse = response;
             return Task.CompletedTask;
         }
 
-        public Task RespondToElicitationAsync(ElicitationResponse response, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RespondToElicitationAsync(ElicitationResponse response, CancellationToken cancellationToken = default)
+        {
+            ElicitationResponse = response;
+            return Task.CompletedTask;
+        }
         public Task<ResultPage<KernelItem>> ReadHistoryAsync(SessionRef session, PageRequest request, CancellationToken cancellationToken = default) =>
             Task.FromResult(new ResultPage<KernelItem>([HistoryItem], null, false));
         public Task<KernelDiff?> ReadDiffAsync(SessionRef session, string? nativeTurnOrItemId = null, CancellationToken cancellationToken = default) =>
@@ -301,10 +453,10 @@ public sealed class KernelHostTests
             await foreach (var item in _events.Reader.ReadAllAsync(cancellationToken)) yield return item;
         }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
+            if (EventOnDispose is not null) await _events.Writer.WriteAsync(EventOnDispose);
             _events.Writer.TryComplete();
-            return ValueTask.CompletedTask;
         }
 
         public ValueTask EmitAsync(KernelEvent item) => _events.Writer.WriteAsync(item);
@@ -315,9 +467,10 @@ public sealed class KernelHostTests
             KernelEventKind kind,
             KernelEventData data,
             string? nativeTurnId = null,
-            string? nativeItemId = null) =>
+            string? nativeItemId = null,
+            string? nativeEventId = null) =>
             new(AdapterId, _profile!.ProfileId, session.NativeSessionId, nativeTurnId, nativeItemId,
-                sequence, DateTimeOffset.UtcNow, kind, data, JsonSerializer.SerializeToElement(new { source = "test" }));
+                sequence, DateTimeOffset.UtcNow, kind, data, JsonSerializer.SerializeToElement(new { source = "test" }), nativeEventId);
 
         private static KernelSessionSummary Summary(SessionRef session)
         {
