@@ -1,10 +1,12 @@
 using Microsoft.UI.Xaml;
+using Talah.Harness.App.Services;
 
 namespace Talah.Harness.App;
 
-public partial class App : Application
+public partial class App : Microsoft.UI.Xaml.Application
 {
     public static Window? MainWindow { get; private set; }
+    public static HarnessController Controller { get; } = new();
 
     public App()
     {
@@ -14,7 +16,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        MainWindow = new MainWindow();
+        MainWindow = new MainWindow(Controller);
         MainWindow.Activate();
     }
 
@@ -26,23 +28,12 @@ public partial class App : Application
 
 internal static class CrashLog
 {
-    private static readonly string LogDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Talah Harness",
-        "logs");
+    private static readonly SecureDiagnosticLog Log = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Talah Harness"));
 
     public static void Write(string source, Exception exception)
     {
-        try
-        {
-            Directory.CreateDirectory(LogDirectory);
-            var line = $"{DateTimeOffset.UtcNow:O}\t{source}\t{exception.GetType().Name}\t{exception.Message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(LogDirectory, "crash.log"), line);
-        }
-        catch
-        {
-            // Crash reporting must never replace the original failure.
-        }
+        Log.Write(source, exception);
     }
 }
 

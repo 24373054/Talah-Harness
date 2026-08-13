@@ -13,12 +13,69 @@
       <RowDefinition Height="52" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
+    <VisualStateManager.VisualStateGroups>
+      <VisualStateGroup x:Name="AdaptiveLayoutStates">
+        <VisualState x:Name="NarrowLayout">
+          <VisualState.Setters>
+            <Setter Target="TitleIdentityColumn.Width" Value="190" />
+            <Setter Target="KernelRunway.Visibility" Value="Collapsed" />
+            <Setter Target="SessionColumn.Width" Value="0" />
+            <Setter Target="SessionSeparatorColumn.Width" Value="0" />
+            <Setter Target="InspectorSeparatorColumn.Width" Value="0" />
+            <Setter Target="InspectorColumn.Width" Value="0" />
+            <Setter Target="SessionPane.Visibility" Value="Collapsed" />
+            <Setter Target="SessionSeparator.Visibility" Value="Collapsed" />
+            <Setter Target="InspectorSeparator.Visibility" Value="Collapsed" />
+            <Setter Target="InspectorPane.Visibility" Value="Collapsed" />
+            <Setter Target="OnboardingArtColumn.Width" Value="0" />
+            <Setter Target="OnboardingContentColumn.Width" Value="*" />
+            <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
+          </VisualState.Setters>
+        </VisualState>
+        <VisualState x:Name="MediumLayout">
+          <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="760" /></VisualState.StateTriggers>
+          <VisualState.Setters>
+            <Setter Target="TitleIdentityColumn.Width" Value="240" />
+            <Setter Target="KernelRunway.Visibility" Value="Collapsed" />
+            <Setter Target="SessionColumn.Width" Value="240" />
+            <Setter Target="SessionSeparatorColumn.Width" Value="1" />
+            <Setter Target="InspectorSeparatorColumn.Width" Value="0" />
+            <Setter Target="InspectorColumn.Width" Value="0" />
+            <Setter Target="SessionPane.Visibility" Value="Visible" />
+            <Setter Target="SessionSeparator.Visibility" Value="Visible" />
+            <Setter Target="InspectorSeparator.Visibility" Value="Collapsed" />
+            <Setter Target="InspectorPane.Visibility" Value="Collapsed" />
+            <Setter Target="OnboardingArtColumn.Width" Value="0" />
+            <Setter Target="OnboardingContentColumn.Width" Value="*" />
+            <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
+          </VisualState.Setters>
+        </VisualState>
+        <VisualState x:Name="WideLayout">
+          <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1180" /></VisualState.StateTriggers>
+          <VisualState.Setters>
+            <Setter Target="TitleIdentityColumn.Width" Value="296" />
+            <Setter Target="KernelRunway.Visibility" Value="Visible" />
+            <Setter Target="SessionColumn.Width" Value="296" />
+            <Setter Target="SessionSeparatorColumn.Width" Value="1" />
+            <Setter Target="InspectorSeparatorColumn.Width" Value="1" />
+            <Setter Target="InspectorColumn.Width" Value="344" />
+            <Setter Target="SessionPane.Visibility" Value="Visible" />
+            <Setter Target="SessionSeparator.Visibility" Value="Visible" />
+            <Setter Target="InspectorSeparator.Visibility" Value="Visible" />
+            <Setter Target="InspectorPane.Visibility" Value="Visible" />
+            <Setter Target="OnboardingArtColumn.Width" Value="1.15*" />
+            <Setter Target="OnboardingContentColumn.Width" Value="0.85*" />
+            <Setter Target="OnboardingImage.Visibility" Value="Visible" />
+          </VisualState.Setters>
+        </VisualState>
+      </VisualStateGroup>
+    </VisualStateManager.VisualStateGroups>
 
     <!-- Extended title bar / kernel runway -->
     <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="0,0,0,1">
       <Grid>
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="296" />
+          <ColumnDefinition x:Name="TitleIdentityColumn" Width="296" />
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
@@ -33,13 +90,13 @@
           </StackPanel>
         </StackPanel>
 
-        <ItemsRepeater Grid.Column="1" Margin="12,0" ItemsSource="{x:Bind Kernels}">
+        <ItemsRepeater x:Name="KernelRunway" Grid.Column="1" Margin="12,0" ItemsSource="{x:Bind Kernels}">
           <ItemsRepeater.Layout>
             <StackLayout Orientation="Horizontal" Spacing="8" />
           </ItemsRepeater.Layout>
           <ItemsRepeater.ItemTemplate>
             <DataTemplate x:DataType="models:KernelDisplayState">
-              <Button Padding="10,6" CornerRadius="7" Background="Transparent" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" AutomationProperties.Name="{x:Bind Name}">
+              <Button MinHeight="44" Padding="10,6" CornerRadius="7" Background="Transparent" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" Click="KernelStatus_Click" AutomationProperties.Name="{x:Bind Name}" AutomationProperties.HelpText="Open kernel setup and health details">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                   <Ellipse Width="7" Height="7" Fill="{x:Bind IndicatorBrush}" VerticalAlignment="Center" />
                   <TextBlock FontFamily="Cascadia Mono" FontSize="11" Text="{x:Bind Name}" Foreground="{StaticResource PrimaryTextBrush}" />
@@ -64,15 +121,15 @@
     <!-- Main three-pane workbench -->
     <Grid Grid.Row="1">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="296" />
-        <ColumnDefinition Width="1" />
-        <ColumnDefinition Width="*" MinWidth="480" />
-        <ColumnDefinition Width="1" />
-        <ColumnDefinition Width="344" />
+        <ColumnDefinition x:Name="SessionColumn" Width="296" />
+        <ColumnDefinition x:Name="SessionSeparatorColumn" Width="1" />
+        <ColumnDefinition Width="*" MinWidth="320" />
+        <ColumnDefinition x:Name="InspectorSeparatorColumn" Width="1" />
+        <ColumnDefinition x:Name="InspectorColumn" Width="344" />
       </Grid.ColumnDefinitions>
 
       <!-- Session ledger -->
-      <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}">
+      <Border x:Name="SessionPane" Grid.Column="0" Background="{StaticResource SurfaceBrush}">
         <Grid Padding="14,14,12,12">
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -90,14 +147,14 @@
               <TextBlock Style="{StaticResource InstrumentLabelStyle}" Text="SESSION LEDGER" />
               <TextBlock Style="{StaticResource SectionTitleStyle}" Text="Workspace runs" />
             </StackPanel>
-            <Button Grid.Column="1" Width="38" Height="38" CornerRadius="8" Click="NewSession_Click" AutomationProperties.Name="Create a new session">
+            <Button Grid.Column="1" Width="44" Height="44" CornerRadius="8" Click="NewSession_Click" AutomationProperties.Name="Create a new session">
               <FontIcon Glyph="&#xE710;" FontSize="16" />
             </Button>
           </Grid>
 
           <AutoSuggestBox Grid.Row="1" Margin="0,14,0,10" PlaceholderText="Filter sessions" QueryIcon="Find" TextChanged="SessionFilter_TextChanged" AutomationProperties.Name="Filter sessions" />
 
-          <ListView x:Name="SessionList" Grid.Row="2" ItemsSource="{x:Bind Sessions}" SelectionChanged="SessionList_SelectionChanged" SelectionMode="Single" IsItemClickEnabled="False">
+          <ListView x:Name="SessionList" Grid.Row="2" ItemsSource="{x:Bind Sessions}" SelectionChanged="SessionList_SelectionChanged" SelectionMode="Single" IsItemClickEnabled="False" AutomationProperties.Name="Sessions across running kernels" TabIndex="2">
             <ListView.ItemContainerStyle>
               <Style TargetType="ListViewItem">
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -131,7 +188,7 @@
             </ListView.ItemTemplate>
           </ListView>
 
-          <Button Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="8" Click="ChooseWorkspace_Click">
+          <Button Grid.Row="3" MinHeight="44" Margin="0,10,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="8" Click="ChooseWorkspace_Click" AutomationProperties.Name="Choose workspace" AutomationProperties.HelpText="Choose the approved root for sessions and attachments">
             <StackPanel Orientation="Horizontal" Spacing="10">
               <FontIcon Glyph="&#xE838;" FontSize="15" />
               <StackPanel>
@@ -143,7 +200,7 @@
         </Grid>
       </Border>
 
-      <Border Grid.Column="1" Background="{StaticResource SubtleBorderBrush}" />
+      <Border x:Name="SessionSeparator" Grid.Column="1" Background="{StaticResource SubtleBorderBrush}" />
 
       <!-- Trace ledger -->
       <Grid Grid.Column="2" Background="{StaticResource CanvasBrush}">
@@ -164,10 +221,10 @@
               <TextBlock x:Name="ConversationMetaText" Style="{StaticResource InstrumentLabelStyle}" Text="SELECT A KERNEL AND WORKSPACE TO BEGIN" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="2">
-              <Button Style="{StaticResource QuietIconButtonStyle}" Click="RefreshSession_Click" ToolTipService.ToolTip="Refresh session" AutomationProperties.Name="Refresh session">
+              <Button x:Name="RefreshSessionButton" Style="{StaticResource QuietIconButtonStyle}" Click="RefreshSession_Click" ToolTipService.ToolTip="Refresh session" AutomationProperties.Name="Refresh session">
                 <FontIcon Glyph="&#xE72C;" FontSize="16" />
               </Button>
-              <Button Style="{StaticResource QuietIconButtonStyle}" Click="OpenSessionMenu_Click" ToolTipService.ToolTip="Session actions" AutomationProperties.Name="Session actions">
+              <Button x:Name="SessionMenuButton" Style="{StaticResource QuietIconButtonStyle}" Click="OpenSessionMenu_Click" ToolTipService.ToolTip="Session actions" AutomationProperties.Name="Session actions">
                 <FontIcon Glyph="&#xE712;" FontSize="16" />
               </Button>
             </StackPanel>
@@ -232,35 +289,51 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <TextBox x:Name="PromptTextBox" MinHeight="68" MaxHeight="220" AcceptsReturn="True" TextWrapping="Wrap" PlaceholderText="Describe the change, investigation, or command…" BorderThickness="0" Background="Transparent" IsEnabled="False" KeyDown="PromptTextBox_KeyDown" AutomationProperties.Name="Agent prompt" />
-            <Grid Grid.Row="1" Margin="2,8,0,0">
+            <TextBox x:Name="PromptTextBox" MinHeight="68" MaxHeight="220" AcceptsReturn="True" TextWrapping="Wrap" PlaceholderText="Describe the change, investigation, or command…" BorderThickness="0" Background="Transparent" IsEnabled="False" KeyDown="PromptTextBox_KeyDown" AutomationProperties.Name="Agent prompt" AutomationProperties.HelpText="Control Enter sends or steers the active kernel" TabIndex="3" />
+            <ItemsControl x:Name="AttachmentList" Grid.Row="1" Margin="2,4,0,2" ItemsSource="{x:Bind Attachments}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><ItemsWrapGrid Orientation="Horizontal" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="models:AttachmentDisplayState">
+                  <Border Margin="0,0,6,4" Padding="8,4" Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="6">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{x:Bind Name}" VerticalAlignment="Center" FontFamily="Cascadia Mono" FontSize="10" />
+                      <Button Padding="4" Background="Transparent" Click="RemoveAttachment_Click" AutomationProperties.Name="Remove attachment"><FontIcon Glyph="&#xE711;" FontSize="10" /></Button>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid Grid.Row="2" Margin="2,8,0,0">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
               <StackPanel Orientation="Horizontal" Spacing="2">
-                <Button Style="{StaticResource QuietIconButtonStyle}" Click="AttachFiles_Click" IsEnabled="False" ToolTipService.ToolTip="Attach files" AutomationProperties.Name="Attach files">
+                <Button x:Name="AttachButton" Style="{StaticResource QuietIconButtonStyle}" Click="AttachFiles_Click" IsEnabled="False" ToolTipService.ToolTip="Attach files" AutomationProperties.Name="Attach files" AutomationProperties.HelpText="Only files inside the approved workspace may be attached">
                   <FontIcon Glyph="&#xE723;" FontSize="16" />
                 </Button>
                 <Button Style="{StaticResource QuietIconButtonStyle}" Click="ChooseWorkspace_Click" ToolTipService.ToolTip="Change workspace" AutomationProperties.Name="Change workspace">
                   <FontIcon Glyph="&#xE838;" FontSize="16" />
                 </Button>
-                <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" FontFamily="Cascadia Mono" FontSize="10" Text="NO ACTIVE KERNEL" Foreground="{StaticResource SecondaryTextBrush}" />
+                <TextBlock x:Name="ComposerStatusText" Margin="8,0,0,0" VerticalAlignment="Center" FontFamily="Cascadia Mono" FontSize="10" Text="NO ACTIVE KERNEL" Foreground="{StaticResource SecondaryTextBrush}" AutomationProperties.LiveSetting="Polite" />
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                <Button x:Name="StopButton" Visibility="Collapsed" Click="StopTurn_Click" Content="Stop" />
-                <Button x:Name="SendButton" IsEnabled="False" Click="SendPrompt_Click" Content="Run" />
+                <Button x:Name="StopButton" MinHeight="44" Visibility="Collapsed" Click="StopTurn_Click" Content="Stop" AutomationProperties.Name="Cancel active turn" />
+                <Button x:Name="SendButton" MinHeight="44" IsEnabled="False" Click="SendPrompt_Click" Content="Run" AutomationProperties.Name="Run prompt" TabIndex="4" />
               </StackPanel>
             </Grid>
           </Grid>
         </Border>
       </Grid>
 
-      <Border Grid.Column="3" Background="{StaticResource SubtleBorderBrush}" />
+      <Border x:Name="InspectorSeparator" Grid.Column="3" Background="{StaticResource SubtleBorderBrush}" />
 
       <!-- Inspector -->
-      <Border Grid.Column="4" Background="{StaticResource SurfaceBrush}">
+      <Border x:Name="InspectorPane" Grid.Column="4" Background="{StaticResource SurfaceBrush}">
         <ScrollViewer Padding="16,14,14,18">
           <StackPanel Spacing="16">
             <StackPanel Spacing="2">
@@ -284,6 +357,12 @@
               </StackPanel>
             </Border>
 
+            <StackPanel Spacing="5">
+              <TextBlock Text="Session and profile" FontWeight="SemiBold" />
+              <TextBlock x:Name="InspectorSessionText" Text="No session selected" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
+              <TextBlock x:Name="InspectorWorkspaceText" Text="No workspace selected" TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="10" Foreground="{StaticResource SecondaryTextBrush}" />
+            </StackPanel>
+
             <StackPanel Spacing="8">
               <TextBlock Text="Security boundary" FontWeight="SemiBold" />
               <InfoBar x:Name="SecurityInfoBar" IsOpen="True" IsClosable="False" Severity="Informational" Title="No kernel selected" Message="The selected kernel's actual enforcement owner, writable roots, process limits, and network policy appear here." />
@@ -296,16 +375,18 @@
                   <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="Workspace impact" FontWeight="SemiBold" />
-                <Button Grid.Column="1" Style="{StaticResource QuietIconButtonStyle}" IsEnabled="False" AutomationProperties.Name="Refresh workspace impact">
+                <Button x:Name="RefreshDiffButton" Grid.Column="1" Style="{StaticResource QuietIconButtonStyle}" IsEnabled="False" Click="RefreshDiff_Click" AutomationProperties.Name="Refresh workspace impact">
                   <FontIcon Glyph="&#xE72C;" FontSize="13" />
                 </Button>
               </Grid>
-              <Border Padding="13,18" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="8">
-                <StackPanel HorizontalAlignment="Center" Spacing="6">
-                  <FontIcon Glyph="&#xE8A5;" FontSize="22" Foreground="{StaticResource SecondaryTextBrush}" />
-                  <TextBlock Text="No file changes" Foreground="{StaticResource SecondaryTextBrush}" />
-                </StackPanel>
+              <Border Padding="13,12" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="8">
+                <TextBlock x:Name="DiffText" MaxHeight="260" Text="No file changes reported by the selected kernel." TextWrapping="NoWrap" IsTextSelectionEnabled="True" FontFamily="Cascadia Mono" FontSize="10" Foreground="{StaticResource SecondaryTextBrush}" />
               </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="5">
+              <TextBlock Text="Usage" FontWeight="SemiBold" />
+              <TextBlock x:Name="UsageText" Text="No token or cost totals reported." TextWrapping="Wrap" FontFamily="Cascadia Mono" FontSize="10" Foreground="{StaticResource SecondaryTextBrush}" AutomationProperties.LiveSetting="Polite" />
             </StackPanel>
 
             <StackPanel Spacing="8">
@@ -337,15 +418,16 @@
     <InfoBar x:Name="TransientInfoBar" Grid.Row="1" Margin="16" HorizontalAlignment="Center" VerticalAlignment="Top" MaxWidth="680" IsOpen="False" IsClosable="True" />
 
     <!-- First-run overlay -->
-    <Grid x:Name="OnboardingOverlay" Grid.RowSpan="2" Background="#E6080645" Visibility="Collapsed">
-      <Border MaxWidth="1120" MaxHeight="720" Margin="36" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{StaticResource SurfaceBrush}" BorderBrush="#5562C7E5" BorderThickness="1" CornerRadius="14">
+    <Grid x:Name="OnboardingOverlay" Grid.RowSpan="2" Background="{StaticResource OverlayBrush}" Visibility="Collapsed">
+      <Border MaxWidth="1120" MaxHeight="720" Margin="36" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource ChainCyanBrush}" BorderThickness="1" CornerRadius="14">
         <Grid>
           <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="1.15*" />
-            <ColumnDefinition Width="0.85*" />
+            <ColumnDefinition x:Name="OnboardingArtColumn" Width="1.15*" />
+            <ColumnDefinition x:Name="OnboardingContentColumn" Width="0.85*" />
           </Grid.ColumnDefinitions>
-          <Image Grid.Column="0" Source="Assets/Brand/onboarding-kernel-traces.png" Stretch="UniformToFill" />
-          <StackPanel Grid.Column="1" Padding="38,34" VerticalAlignment="Center" Spacing="17">
+          <Image x:Name="OnboardingImage" Grid.Column="0" Source="Assets/Brand/onboarding-kernel-traces.png" Stretch="UniformToFill" />
+          <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Padding="38,34" VerticalAlignment="Center" Spacing="17">
             <TextBlock Style="{StaticResource InstrumentLabelStyle}" Text="TALAH HARNESS / FIRST RUN" />
             <TextBlock FontFamily="Bahnschrift SemiCondensed" FontSize="42" FontWeight="SemiBold" Text="Three kernels. One accountable trace." TextWrapping="Wrap" Foreground="{StaticResource PrimaryTextBrush}" />
             <TextBlock FontSize="15" LineHeight="23" Text="Choose Codex, OpenCode, or TLAH for each session. The Harness keeps the workspace, approvals, process lifecycle, and durable audit trail visible without pretending the engines have identical security guarantees." TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
@@ -363,12 +445,15 @@
                 <TextBlock Text="Interrupted sessions remain recoverable and inspectable" TextWrapping="Wrap" />
               </StackPanel>
             </StackPanel>
-            <CheckBox x:Name="TelemetryConsentCheckBox" Content="Share anonymous reliability diagnostics" IsChecked="False" />
+            <TextBlock x:Name="OnboardingHealthText" FontFamily="Cascadia Mono" FontSize="10" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock x:Name="OnboardingWorkspaceText" Text="Workspace not selected" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
               <Button Click="ReviewSecurity_Click" Content="Review security" />
-              <Button Click="CompleteOnboarding_Click" Content="Set up kernels" />
+              <Button Click="ChooseWorkspace_Click" Content="Choose workspace" />
+              <Button Click="CompleteOnboarding_Click" Content="Finish setup" />
             </StackPanel>
           </StackPanel>
+          </ScrollViewer>
         </Grid>
       </Border>
     </Grid>

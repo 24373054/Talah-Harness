@@ -30,6 +30,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Talah.Harness.Contracts\Talah.Harness.Contracts.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Application\Talah.Harness.Application.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Persistence\Talah.Harness.Persistence.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Adapters.Codex\Talah.Harness.Adapters.Codex.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Adapters.OpenCode\Talah.Harness.Adapters.OpenCode.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Adapters.Tlah\Talah.Harness.Adapters.Tlah.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -13,6 +13,7 @@
           <Color x:Key="PrimaryTextColor">#FF162230</Color>
           <Color x:Key="SecondaryTextColor">#B3162230</Color>
           <Color x:Key="RailColor">#3862C7E5</Color>
+          <Color x:Key="OverlayColor">#CC080645</Color>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <Color x:Key="CanvasColor">#FF0B1220</Color>
@@ -22,6 +23,7 @@
           <Color x:Key="PrimaryTextColor">#FFF4F7FA</Color>
           <Color x:Key="SecondaryTextColor">#BDF4F7FA</Color>
           <Color x:Key="RailColor">#6662C7E5</Color>
+          <Color x:Key="OverlayColor">#E6080645</Color>
         </ResourceDictionary>
         <ResourceDictionary x:Key="HighContrast">
           <Color x:Key="CanvasColor">#FF000000</Color>
@@ -31,6 +33,7 @@
           <Color x:Key="PrimaryTextColor">#FFFFFFFF</Color>
           <Color x:Key="SecondaryTextColor">#FFFFFFFF</Color>
           <Color x:Key="RailColor">#FFFFFF00</Color>
+          <Color x:Key="OverlayColor">#FF000000</Color>
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
 
@@ -41,6 +44,7 @@
       <SolidColorBrush x:Key="PrimaryTextBrush" Color="{ThemeResource PrimaryTextColor}" />
       <SolidColorBrush x:Key="SecondaryTextBrush" Color="{ThemeResource SecondaryTextColor}" />
       <SolidColorBrush x:Key="TraceRailBrush" Color="{ThemeResource RailColor}" />
+      <SolidColorBrush x:Key="OverlayBrush" Color="{ThemeResource OverlayColor}" />
       <SolidColorBrush x:Key="ChainCyanBrush" Color="#FF62C7E5" />
       <SolidColorBrush x:Key="LedgerBlueBrush" Color="#FF115A82" />
       <SolidColorBrush x:Key="EvidenceGoldBrush" Color="#FFD8B956" />
@@ -62,9 +66,14 @@
         <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
       </Style>
 
+      <Style TargetType="Button">
+        <Setter Property="MinWidth" Value="44" />
+        <Setter Property="MinHeight" Value="44" />
+      </Style>
+
       <Style x:Key="QuietIconButtonStyle" TargetType="Button">
-        <Setter Property="MinWidth" Value="36" />
-        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="MinWidth" Value="44" />
+        <Setter Property="MinHeight" Value="44" />
         <Setter Property="Padding" Value="8" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Background" Value="Transparent" />
