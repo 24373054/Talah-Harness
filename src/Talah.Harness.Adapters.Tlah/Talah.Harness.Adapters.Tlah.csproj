@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Talah.Harness.Adapters.Tlah</RootNamespace>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Talah.Harness.Contracts\Talah.Harness.Contracts.csproj" />
+    <ProjectReference Include="..\..\third_party\TLAH-Studio\TLAHStudio.Core\TLAHStudio.Core.csproj" />
+    <ProjectReference Include="..\..\third_party\TLAH-Studio\TLAHStudio.Data\TLAHStudio.Data.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.28" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+  </ItemGroup>
+</Project>
