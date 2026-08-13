@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Talah.Harness.Persistence</RootNamespace>
+    <Description>Canonical SQLite persistence for Talah Harness.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Talah.Harness.Contracts/Talah.Harness.Contracts.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+  </ItemGroup>
+</Project>
