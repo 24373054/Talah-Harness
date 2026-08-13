@@ -130,8 +130,9 @@ A tag exactly equal to `v1.0.0` invokes the signed release workflow. Configure:
 The tag job fails closed if signing inputs or the HTTPS release URI are absent.
 Secrets are placed in the runner environment only for the signing job, are never
 printed by repository scripts, and the temporary PFX lives under `RUNNER_TEMP`.
-All third-party Actions are pinned by full commit SHA. Release workflow permission
-is limited to `contents: write`; PR CI has only `contents: read`.
+All third-party Actions are pinned by full commit SHA. Build jobs and PR CI have
+only `contents: read`; a separate publication job receives `contents: write`
+after the signed build and all release validation succeed.
 
 Before publishing, compare the tag to `src/Directory.Build.props`, review the
 generated SBOM/license inventory, verify `SHA256SUMS`, install on a clean x64 VM,
