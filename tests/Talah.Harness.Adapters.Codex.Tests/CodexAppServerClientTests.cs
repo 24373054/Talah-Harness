@@ -79,6 +79,72 @@ public sealed class CodexAppServerClientTests
     }
 
     [Fact]
+    public async Task NotificationsAreDeliveredInExactWireOrderEvenWhenAHandlerIsSlow()
+    {
+        const int notificationCount = 200;
+        var transport = new FakeCodexTransport();
+        await using var client = new CodexAppServerClient(transport);
+        var received = new List<int>(notificationCount);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.NotificationReceived += async (_, parameters, _) =>
+        {
+            var sequence = parameters.GetProperty("sequence").GetInt32();
+            if (sequence % 17 == 0)
+            {
+                await Task.Delay(5);
+            }
+
+            received.Add(sequence);
+            if (received.Count == notificationCount)
+            {
+                completed.TrySetResult();
+            }
+        };
+
+        for (var index = 0; index < notificationCount; index++)
+        {
+            transport.Send(new { method = "test/ordered", @params = new { sequence = index } });
+        }
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(Enumerable.Range(0, notificationCount), received);
+    }
+
+    [Fact]
+    public async Task NotificationHandlerFailuresAreRedactedDiagnosticsAndDoNotBecomeUnobservedTasks()
+    {
+        var transport = new FakeCodexTransport();
+        await using var client = new CodexAppServerClient(transport);
+        var diagnostic = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subsequent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.DiagnosticReceived += value =>
+        {
+            if (value.Contains("handler failed", StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostic.TrySetResult(value);
+            }
+        };
+        client.NotificationReceived += (method, _, _) =>
+        {
+            if (method == "test/failing")
+            {
+                throw new InvalidOperationException("Bearer notification-handler-secret");
+            }
+
+            subsequent.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        transport.Send(new { method = "test/failing", @params = new { } });
+        transport.Send(new { method = "test/subsequent", @params = new { } });
+
+        var value = await diagnostic.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await subsequent.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.DoesNotContain("notification-handler-secret", value, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", value, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RequestTimeoutIsReportedAndLateResponseIsIgnored()
     {
         var transport = new FakeCodexTransport();

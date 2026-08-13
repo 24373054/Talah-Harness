@@ -249,17 +249,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
                 return Task.CompletedTask;
             }
 
-            var notificationHandler = NotificationReceived;
-            if (notificationHandler is not null)
-            {
-                _ = Task.Run(() => notificationHandler(method, parameters, root.Clone()));
-            }
-            else
-            {
-                DiagnosticReceived?.Invoke($"Ignored Codex notification '{method}'.");
-            }
-
-            return Task.CompletedTask;
+            return DispatchNotificationAsync(method, parameters, root.Clone());
         }
 
         if (root.TryGetProperty("id", out var idElement) &&
@@ -290,6 +280,29 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
         DiagnosticReceived?.Invoke("Ignored unknown Codex message shape.");
         return Task.CompletedTask;
+    }
+
+    private async Task DispatchNotificationAsync(string method, JsonElement parameters, JsonElement vendorData)
+    {
+        var handlers = NotificationReceived;
+        if (handlers is null)
+        {
+            DiagnosticReceived?.Invoke($"Ignored Codex notification '{method}'.");
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList().Cast<Func<string, JsonElement, JsonElement, Task>>())
+        {
+            try
+            {
+                await handler(method, parameters, vendorData).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                DiagnosticReceived?.Invoke(
+                    Redact($"Codex notification handler failed for '{method}': {ex.Message}"));
+            }
+        }
     }
 
     private async Task StderrLoopAsync()
