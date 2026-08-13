@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Threading.Channels;
 using Talah.Harness.Contracts;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.Codex;
 
@@ -11,18 +11,16 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
     public const string CodexAdapterId = "codex";
     private readonly KernelProfile _profile;
     private readonly CodexAppServerClient _client;
-    private readonly Channel<KernelEvent> _events = Channel.CreateBounded<KernelEvent>(
-        new BoundedChannelOptions(4_096)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = false,
-            SingleReader = false
-        });
+    private readonly PrioritizedEventBuffer<KernelEvent> _events = new(
+        4_096,
+        1_024,
+        static item => item.Kind == KernelEventKind.ContentDelta);
     private readonly ConcurrentDictionary<string, PendingInteraction> _interactions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _diffs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _writableRoots = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
     private long _sequence;
+    private long _reportedDroppedDeltas;
     private int _initialized;
     private int _disposed;
     private string? _nativeVersion;
@@ -545,8 +543,10 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        await foreach (KernelEvent? item in _events.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
+        await foreach (KernelEvent? item in _events.ReadAllAsync(linked.Token).ConfigureAwait(false))
         {
+            KernelEvent? gap = CreateDeltaGapEvent(item);
+            if (gap is not null) yield return gap;
             yield return item;
         }
     }
@@ -944,7 +944,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         long sequence = Interlocked.Increment(ref _sequence);
         try
         {
-            _events.Writer.WriteAsync(new KernelEvent(
+            _events.TryWrite(new KernelEvent(
                 AdapterId,
                 _profile.ProfileId,
                 threadId,
@@ -954,11 +954,32 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
                 DateTimeOffset.UtcNow,
                 kind,
                 data,
-                VendorJson.Sanitize(vendorData)), _lifetime.Token).AsTask().GetAwaiter().GetResult();
+                VendorJson.Sanitize(vendorData)));
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
         }
+    }
+
+    private KernelEvent? CreateDeltaGapEvent(KernelEvent next)
+    {
+        long dropped = _events.DroppedCount;
+        long gap = dropped - Interlocked.Read(ref _reportedDroppedDeltas);
+        if (gap <= 0) return null;
+        Interlocked.Exchange(ref _reportedDroppedDeltas, dropped);
+        return new KernelEvent(
+            AdapterId,
+            _profile.ProfileId,
+            next.NativeSessionId,
+            next.NativeTurnId,
+            null,
+            Interlocked.Increment(ref _sequence),
+            DateTimeOffset.UtcNow,
+            KernelEventKind.Diagnostic,
+            new DiagnosticEventData(new KernelDiagnostic(
+                "CODEX_EVENT_DELTA_GAP",
+                DiagnosticSeverity.Warning,
+                $"Dropped {gap} streaming content delta event(s) under sustained backpressure; refresh canonical history to reconcile complete content.")));
     }
 
     private void EmitDiagnostic(
@@ -1219,7 +1240,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
 
         _availability = KernelAvailability.Stopped;
         _lifetime.Cancel();
-        _events.Writer.TryComplete();
+        _events.Complete();
         await _client.DisposeAsync().ConfigureAwait(false);
         _lifetime.Dispose();
     }

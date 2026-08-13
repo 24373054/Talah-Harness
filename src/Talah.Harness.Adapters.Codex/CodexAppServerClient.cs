@@ -14,6 +14,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
     private readonly ICodexTransport _transport;
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _serverRequestSlots;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly TimeSpan _requestTimeout;
     private readonly int _maximumMessageBytes;
@@ -27,14 +28,17 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
     public CodexAppServerClient(
         ICodexTransport transport,
         TimeSpan? requestTimeout = null,
-        int maximumMessageBytes = DefaultMaximumMessageBytes)
+        int maximumMessageBytes = DefaultMaximumMessageBytes,
+        int maximumConcurrentServerRequests = 64)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumMessageBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConcurrentServerRequests);
 
         _transport = transport;
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30);
         _maximumMessageBytes = maximumMessageBytes;
+        _serverRequestSlots = new SemaphoreSlim(maximumConcurrentServerRequests, maximumConcurrentServerRequests);
         _receiveTask = Task.Run(ReceiveLoopAsync);
         _stderrTask = Task.Run(StderrLoopAsync);
     }
@@ -68,8 +72,6 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
         try
         {
-            await WriteAsync(new { id, method, @params = parameters ?? new { } }, cancellationToken)
-                .ConfigureAwait(false);
             using var timeout = new CancellationTokenSource(_requestTimeout);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
@@ -77,6 +79,8 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
                 _lifetime.Token);
             try
             {
+                await WriteAsync(new { id, method, @params = parameters ?? new { } }, linked.Token)
+                    .ConfigureAwait(false);
                 return await source.Task.WaitAsync(linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (
@@ -234,21 +238,16 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
                     return RespondErrorAsync(requestId.Clone(), -32601, $"Unsupported server request: {method}");
                 }
 
-                _ = Task.Run(async () =>
+                if (!_serverRequestSlots.Wait(0))
                 {
-                    try
-                    {
-                        await handler(new CodexServerRequest(
-                            requestId.Clone(),
-                            method,
-                            parameters,
-                            root.Clone())).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        await RespondErrorAsync(requestId.Clone(), -32603, Redact(ex.Message)).ConfigureAwait(false);
-                    }
-                });
+                    return RespondErrorAsync(requestId.Clone(), -32001,
+                        "The host is already handling the maximum number of concurrent server requests.",
+                        _lifetime.Token);
+                }
+
+                _ = HandleServerRequestAsync(
+                    handler,
+                    new CodexServerRequest(requestId.Clone(), method, parameters, root.Clone()));
                 return Task.CompletedTask;
             }
 
@@ -283,6 +282,30 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
         DiagnosticReceived?.Invoke("Ignored unknown Codex message shape.");
         return Task.CompletedTask;
+    }
+
+    private async Task HandleServerRequestAsync(
+        Func<CodexServerRequest, Task> handler,
+        CodexServerRequest request)
+    {
+        try
+        {
+            await handler(request).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                await RespondErrorAsync(request.Id, -32603, Redact(ex.Message), _lifetime.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            {
+            }
+        }
+        finally
+        {
+            _serverRequestSlots.Release();
+        }
     }
 
     private async Task DispatchNotificationAsync(string method, JsonElement parameters, JsonElement vendorData)
@@ -398,6 +421,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         }
 
         _writeLock.Dispose();
+        _serverRequestSlots.Dispose();
         _lifetime.Dispose();
     }
 }

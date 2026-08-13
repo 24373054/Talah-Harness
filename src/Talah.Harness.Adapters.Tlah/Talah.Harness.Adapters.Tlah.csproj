@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Talah.Harness.Contracts\Talah.Harness.Contracts.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Runtime\Talah.Harness.Runtime.csproj" />
     <ProjectReference Include="..\..\third_party\TLAH-Studio\TLAHStudio.Core\TLAHStudio.Core.csproj" />
     <ProjectReference Include="..\..\third_party\TLAH-Studio\TLAHStudio.Data\TLAHStudio.Data.csproj" />
   </ItemGroup>

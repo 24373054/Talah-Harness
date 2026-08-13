@@ -154,6 +154,36 @@ public sealed class CodexAppServerClientTests
     }
 
     [Fact]
+    public async Task RequestDeadlineIncludesBlockedPipeWrite()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport = new FakeCodexTransport(_ => gate.Task);
+        await using var client = new CodexAppServerClient(transport, TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => client.RequestAsync("blocked-write", new { }));
+        gate.TrySetResult();
+    }
+
+    [Fact]
+    public async Task ServerRequestFloodIsBoundedAndReturnsOverloadError()
+    {
+        var transport = new FakeCodexTransport();
+        await using var client = new CodexAppServerClient(
+            transport,
+            maximumConcurrentServerRequests: 1);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.ServerRequestReceived += _ => release.Task;
+        transport.Send(new { id = 1, method = "approval", @params = new { } });
+        transport.Send(new { id = 2, method = "approval", @params = new { } });
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        JsonElement overloaded = await transport.NextSentAsync(timeout.Token);
+        Assert.Equal(2, overloaded.GetProperty("id").GetInt32());
+        Assert.Equal(-32001, overloaded.GetProperty("error").GetProperty("code").GetInt32());
+        release.TrySetResult();
+    }
+
+    [Fact]
     public async Task StderrIsRedactedAndReportedAsDiagnostic()
     {
         var transport = new FakeCodexTransport();

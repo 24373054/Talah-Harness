@@ -201,6 +201,24 @@ public sealed class RuntimeTests
     }
 
     [Fact]
+    public async Task PrioritizedEventBufferDropsOnlyLossyValuesAndPreservesCriticalOrder()
+    {
+        var buffer = new PrioritizedEventBuffer<string>(3, 2, value => value.StartsWith("delta", StringComparison.Ordinal));
+        Assert.True(buffer.TryWrite("critical-1"));
+        Assert.True(buffer.TryWrite("delta-1"));
+        Assert.True(buffer.TryWrite("critical-2"));
+        Assert.True(buffer.TryWrite("critical-3"));
+        Assert.True(buffer.TryWrite("delta-dropped"));
+        buffer.Complete();
+
+        var values = new List<string>();
+        await foreach (string value in buffer.ReadAllAsync()) values.Add(value);
+
+        Assert.Equal(["critical-1", "critical-2", "critical-3"], values);
+        Assert.Equal(2, buffer.DroppedCount);
+    }
+
+    [Fact]
     public async Task TimeoutPrimitive_IdentifiesOperation()
     {
         var timeouts = new ProcessTimeouts(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));

@@ -2,8 +2,8 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using Talah.Harness.Contracts;
+using Talah.Harness.Runtime;
 using TLAHStudio.Core.Llm;
 using TLAHStudio.Core.Models;
 using TLAHStudio.Core.Services;
@@ -16,20 +16,17 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
     private const string NativeVersion = "4.16.0";
     private readonly ITlahNativeRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     private readonly TimeSpan _shutdownTimeout = ValidateShutdownTimeout(shutdownTimeout);
-    private readonly Channel<KernelEvent> _events = Channel.CreateBounded<KernelEvent>(
-        new BoundedChannelOptions(4_096)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false
-        });
+    private readonly PrioritizedEventBuffer<KernelEvent> _events = new(
+        4_096,
+        1_024,
+        static item => item.Kind == KernelEventKind.ContentDelta);
     private readonly CancellationTokenSource _eventLifetime = new();
     private readonly ConcurrentDictionary<string, ActiveTurn> _activeTurns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingApproval> _approvals = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Guid, string> _workspaceRoots = new();
     private KernelInitializationContext? _context;
     private long _sequence;
+    private long _reportedDroppedDeltas;
     private bool _disposed;
 
     public string AdapterId => Id;
@@ -311,8 +308,12 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
     public async IAsyncEnumerable<KernelEvent> WatchEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        await foreach (KernelEvent? item in _events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (KernelEvent? item in _events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            KernelEvent? gap = CreateDeltaGapEvent(item);
+            if (gap is not null) yield return gap;
             yield return item;
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -335,7 +336,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         }
         _activeTurns.Clear();
         _approvals.Clear();
-        _events.Writer.TryComplete();
+        _events.Complete();
         _eventLifetime.Dispose();
         try { await _runtime.DisposeAsync().AsTask().WaitAsync(_shutdownTimeout).ConfigureAwait(false); }
         catch (TimeoutException) { }
@@ -505,7 +506,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
             return;
         try
         {
-            _events.Writer.WriteAsync(new KernelEvent(
+            _events.TryWrite(new KernelEvent(
                 Id,
                 context.Profile.ProfileId,
                 sessionId?.ToString("D"),
@@ -514,14 +515,32 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
                 Interlocked.Increment(ref _sequence),
                 DateTimeOffset.UtcNow,
                 kind,
-                data), _eventLifetime.Token).AsTask().GetAwaiter().GetResult();
+                data));
         }
         catch (OperationCanceledException) when (_eventLifetime.IsCancellationRequested)
         {
         }
-        catch (ChannelClosedException) when (_disposed)
-        {
-        }
+    }
+
+    private KernelEvent? CreateDeltaGapEvent(KernelEvent next)
+    {
+        long dropped = _events.DroppedCount;
+        long gap = dropped - Interlocked.Read(ref _reportedDroppedDeltas);
+        if (gap <= 0) return null;
+        Interlocked.Exchange(ref _reportedDroppedDeltas, dropped);
+        return new KernelEvent(
+            Id,
+            EnsureInitialized().Profile.ProfileId,
+            next.NativeSessionId,
+            next.NativeTurnId,
+            null,
+            Interlocked.Increment(ref _sequence),
+            DateTimeOffset.UtcNow,
+            KernelEventKind.Diagnostic,
+            new DiagnosticEventData(new KernelDiagnostic(
+                "TLAH_EVENT_DELTA_GAP",
+                DiagnosticSeverity.Warning,
+                $"Dropped {gap} streaming content delta event(s) under sustained backpressure; refresh native history to reconcile complete content.")));
     }
 
     private KernelSessionSummary MapSession(ChatSummaryDto chat) => new(
