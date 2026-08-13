@@ -35,6 +35,8 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
     public TaskCompletionSource<bool>? RunBlock { get; set; }
     public bool ApprovalSet { get; private set; }
     public bool Cancelled { get; private set; }
+    public bool RunCancellationObserved { get; private set; }
+    public bool IgnoreRunCancellation { get; set; }
     public bool EmitApproval { get; set; }
     public string Provider { get; set; } = "openai";
     public string Model { get; set; } = "gpt-4o";
@@ -133,7 +135,20 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
             return Result(chatId, user, assistant, AgentRunStatuses.AwaitingApproval);
         }
         if (RunBlock is not null)
-            await RunBlock.Task.WaitAsync(cancellationToken);
+        {
+            try
+            {
+                if (IgnoreRunCancellation)
+                    await RunBlock.Task;
+                else
+                    await RunBlock.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                RunCancellationObserved = true;
+                throw;
+            }
+        }
         options.OutputStream?.Report(new LlmStreamUpdate("answer", "native answer", IsFinal: true));
         _messages[chatId].Add(assistant);
         return Result(chatId, user, assistant, AgentRunStatuses.Completed);

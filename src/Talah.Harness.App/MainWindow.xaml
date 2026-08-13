@@ -30,6 +30,10 @@
             <Setter Target="OnboardingArtColumn.Width" Value="0" />
             <Setter Target="OnboardingContentColumn.Width" Value="*" />
             <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
+            <Setter Target="OnboardingCard.Margin" Value="12" />
+            <Setter Target="OnboardingContent.Padding" Value="20" />
+            <Setter Target="OnboardingActions.Orientation" Value="Vertical" />
+            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Stretch" />
           </VisualState.Setters>
         </VisualState>
         <VisualState x:Name="MediumLayout">
@@ -48,6 +52,10 @@
             <Setter Target="OnboardingArtColumn.Width" Value="0" />
             <Setter Target="OnboardingContentColumn.Width" Value="*" />
             <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
+            <Setter Target="OnboardingCard.Margin" Value="24" />
+            <Setter Target="OnboardingContent.Padding" Value="30" />
+            <Setter Target="OnboardingActions.Orientation" Value="Horizontal" />
+            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Right" />
           </VisualState.Setters>
         </VisualState>
         <VisualState x:Name="WideLayout">
@@ -66,6 +74,10 @@
             <Setter Target="OnboardingArtColumn.Width" Value="1.15*" />
             <Setter Target="OnboardingContentColumn.Width" Value="0.85*" />
             <Setter Target="OnboardingImage.Visibility" Value="Visible" />
+            <Setter Target="OnboardingCard.Margin" Value="36" />
+            <Setter Target="OnboardingContent.Padding" Value="38,34" />
+            <Setter Target="OnboardingActions.Orientation" Value="Horizontal" />
+            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Right" />
           </VisualState.Setters>
         </VisualState>
       </VisualStateGroup>
@@ -419,7 +431,7 @@
 
     <!-- First-run overlay -->
     <Grid x:Name="OnboardingOverlay" Grid.RowSpan="2" Background="{StaticResource OverlayBrush}" Visibility="Collapsed">
-      <Border MaxWidth="1120" MaxHeight="720" Margin="36" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource ChainCyanBrush}" BorderThickness="1" CornerRadius="14">
+      <Border x:Name="OnboardingCard" MaxWidth="1120" MaxHeight="720" Margin="36" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource ChainCyanBrush}" BorderThickness="1" CornerRadius="14">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="OnboardingArtColumn" Width="1.15*" />
@@ -427,7 +439,7 @@
           </Grid.ColumnDefinitions>
           <Image x:Name="OnboardingImage" Grid.Column="0" Source="Assets/Brand/onboarding-kernel-traces.png" Stretch="UniformToFill" />
           <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-          <StackPanel Padding="38,34" VerticalAlignment="Center" Spacing="17">
+          <StackPanel x:Name="OnboardingContent" Padding="38,34" VerticalAlignment="Center" Spacing="17">
             <TextBlock Style="{StaticResource InstrumentLabelStyle}" Text="TALAH HARNESS / FIRST RUN" />
             <TextBlock FontFamily="Bahnschrift SemiCondensed" FontSize="42" FontWeight="SemiBold" Text="Three kernels. One accountable trace." TextWrapping="Wrap" Foreground="{StaticResource PrimaryTextBrush}" />
             <TextBlock FontSize="15" LineHeight="23" Text="Choose Codex, OpenCode, or TLAH for each session. The Harness keeps the workspace, approvals, process lifecycle, and durable audit trail visible without pretending the engines have identical security guarantees." TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
@@ -447,7 +459,7 @@
             </StackPanel>
             <TextBlock x:Name="OnboardingHealthText" FontFamily="Cascadia Mono" FontSize="10" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" AutomationProperties.LiveSetting="Polite" />
             <TextBlock x:Name="OnboardingWorkspaceText" Text="Workspace not selected" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <StackPanel x:Name="OnboardingActions" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
               <Button Click="ReviewSecurity_Click" Content="Review security" />
               <Button Click="ChooseWorkspace_Click" Content="Choose workspace" />
               <Button Click="CompleteOnboarding_Click" Content="Finish setup" />

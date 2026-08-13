@@ -10,11 +10,12 @@ using TLAHStudio.Core.Services;
 
 namespace Talah.Harness.Adapters.Tlah;
 
-public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapter, ISessionRenameAdapter
+public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shutdownTimeout = null) : IKernelAdapter, ISessionRenameAdapter
 {
     public const string Id = "tlah";
     private const string NativeVersion = "4.16.0";
     private readonly ITlahNativeRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+    private readonly TimeSpan _shutdownTimeout = ValidateShutdownTimeout(shutdownTimeout);
     private readonly Channel<KernelEvent> _events = Channel.CreateBounded<KernelEvent>(
         new BoundedChannelOptions(4_096)
         {
@@ -233,6 +234,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapt
 
     public async Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Guid chatId = ValidateSession(session);
         string prompt = FlattenInput(input);
         if (string.IsNullOrWhiteSpace(prompt))
@@ -241,7 +243,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapt
             await _runtime.SetModelAsync(chatId, options.ModelId, cancellationToken).ConfigureAwait(false);
 
         string turnId = Guid.NewGuid().ToString("D");
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_eventLifetime.Token);
         var active = new ActiveTurn(session, turnId, cts);
         if (!_activeTurns.TryAdd(turnId, active))
             throw new InvalidOperationException("Unable to allocate the turn.");
@@ -322,16 +324,21 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapt
         foreach (ActiveTurn turn in _activeTurns.Values)
             turn.Cancellation.Cancel();
         Task[] tasks = _activeTurns.Values.Select(turn => turn.Execution).Where(task => task is not null).Cast<Task>().ToArray();
-        try { await Task.WhenAll(tasks).ConfigureAwait(false); }
+        try { await Task.WhenAll(tasks).WaitAsync(_shutdownTimeout).ConfigureAwait(false); }
+        catch (TimeoutException) { }
         catch (OperationCanceledException) { }
         catch { }
         foreach (ActiveTurn turn in _activeTurns.Values)
-            turn.Cancellation.Dispose();
+        {
+            if (turn.Execution?.IsCompleted != false)
+                turn.Cancellation.Dispose();
+        }
         _activeTurns.Clear();
         _approvals.Clear();
         _events.Writer.TryComplete();
         _eventLifetime.Dispose();
-        await _runtime.DisposeAsync().ConfigureAwait(false);
+        try { await _runtime.DisposeAsync().AsTask().WaitAsync(_shutdownTimeout).ConfigureAwait(false); }
+        catch (TimeoutException) { }
     }
 
     private async Task ExecuteTurnAsync(ActiveTurn active, Guid chatId, string prompt, TurnOptions options)
@@ -617,6 +624,14 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapt
         if (string.IsNullOrWhiteSpace(value) || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || value is "." or "..")
             throw new ArgumentException("Profile id is not a safe path segment.", nameof(value));
         return value;
+    }
+
+    private static TimeSpan ValidateShutdownTimeout(TimeSpan? value)
+    {
+        TimeSpan timeout = value ?? TimeSpan.FromSeconds(5);
+        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+            throw new ArgumentOutOfRangeException(nameof(value), "Shutdown timeout must be finite and positive.");
+        return timeout;
     }
 
     private static string Redact(string? message) => TLAHStudio.Core.Helpers.SecretRedactor.RedactText(message ?? string.Empty);

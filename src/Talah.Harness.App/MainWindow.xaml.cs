@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private string? _activeTurnId;
     private bool _isBusy;
     private bool _isClosing;
+    private bool _shutdownComplete;
     private string _sessionFilter = string.Empty;
     private string _approvalMode = "on-request";
     private string _sandboxMode = "workspace-write";
@@ -49,7 +50,6 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ConfigureWindow();
         _controller.EventReceived += Controller_EventReceived;
-        Closed += MainWindow_Closed;
     }
 
     private void ConfigureWindow()
@@ -59,6 +59,7 @@ public sealed partial class MainWindow : Window
         nint windowHandle = WindowNative.GetWindowHandle(this);
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
         _appWindow = AppWindow.GetFromWindowId(windowId);
+        _appWindow.Closing += AppWindow_Closing;
         _appWindow.Resize(new SizeInt32(1480, 920));
         string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
         if (File.Exists(iconPath)) _appWindow.SetIcon(iconPath);
@@ -87,19 +88,42 @@ public sealed partial class MainWindow : Window
         }, "Harness startup");
     }
 
-    private async void MainWindow_Closed(object sender, WindowEventArgs args)
+    private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
+        if (_shutdownComplete) return;
+        args.Cancel = true;
         if (_isClosing) return;
         _isClosing = true;
         _controller.EventReceived -= Controller_EventReceived;
         try { await _controller.DisposeAsync(); }
         catch (Exception exception) { CrashLog.Write("shutdown", exception); }
-        _interactionGate.Dispose();
+        finally
+        {
+            _interactionGate.Dispose();
+            _shutdownComplete = true;
+            Close();
+        }
     }
 
     private void Controller_EventReceived(object? sender, DurableKernelEvent durableEvent)
     {
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () => _ = HandleDurableEventAsync(durableEvent));
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
+            () => _ = HandleDurableEventSafelyAsync(durableEvent));
+    }
+
+    private async Task HandleDurableEventSafelyAsync(DurableKernelEvent durableEvent)
+    {
+        try
+        {
+            await HandleDurableEventAsync(durableEvent);
+        }
+        catch (Exception exception)
+        {
+            CrashLog.Write("event-projection", exception);
+            if (!_isClosing)
+                ShowInfo("Event projection failed", HarnessController.SafeFailure(exception, "Event projection"), InfoBarSeverity.Error);
+        }
     }
 
     private async Task HandleDurableEventAsync(DurableKernelEvent durable)

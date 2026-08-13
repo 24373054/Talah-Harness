@@ -114,6 +114,57 @@ public sealed class TlahKernelAdapterTests
     }
 
     [Fact]
+    public async Task CallerCancellationAfterStartDoesNotOwnRunningTurnLifetime()
+    {
+        using var temp = new TemporaryDirectory();
+        var runtime = new FakeNativeRuntime { RunBlock = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var adapter = new TlahKernelAdapter(runtime, TimeSpan.FromMilliseconds(250));
+        var profile = new KernelProfile("test-profile", TlahKernelAdapter.Id, "Test", temp.Path, new Dictionary<string, string>(), true);
+        await adapter.InitializeAsync(new KernelInitializationContext("1.0.0", profile, temp.Path, temp.Path, false));
+        string workspace = Path.Combine(temp.Path, "workspace");
+        Directory.CreateDirectory(workspace);
+        SessionRef session = (await adapter.CreateSessionAsync(new CreateSessionRequest(
+            new WorkspaceDescriptor("workspace", workspace, [], true), "Test", null, null))).Session;
+        using var caller = new CancellationTokenSource();
+
+        KernelTurn turn = await adapter.StartTurnAsync(
+            session,
+            new TurnInput([new TextContentBlock("continue")]),
+            new TurnOptions(null, null, null, null),
+            caller.Token);
+        caller.Cancel();
+        await Task.Delay(100);
+
+        Assert.False(runtime.RunCancellationObserved);
+        await adapter.CancelTurnAsync(session, turn.NativeTurnId);
+        _ = await WaitForEventAsync(adapter, KernelEventKind.TurnCancelled);
+        Assert.True(runtime.RunCancellationObserved);
+        await adapter.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DisposalIsBoundedWhenNativeRunIgnoresCancellation()
+    {
+        using var temp = new TemporaryDirectory();
+        var blocker = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new FakeNativeRuntime { RunBlock = blocker, IgnoreRunCancellation = true };
+        var adapter = new TlahKernelAdapter(runtime, TimeSpan.FromMilliseconds(100));
+        var profile = new KernelProfile("test-profile", TlahKernelAdapter.Id, "Test", temp.Path, new Dictionary<string, string>(), true);
+        await adapter.InitializeAsync(new KernelInitializationContext("1.0.0", profile, temp.Path, temp.Path, false));
+        string workspace = Path.Combine(temp.Path, "workspace");
+        Directory.CreateDirectory(workspace);
+        SessionRef session = (await adapter.CreateSessionAsync(new CreateSessionRequest(
+            new WorkspaceDescriptor("workspace", workspace, [], true), "Test", null, null))).Session;
+        _ = await adapter.StartTurnAsync(session, new TurnInput([new TextContentBlock("wait")]), new TurnOptions(null, null, null, null));
+
+        Task disposal = adapter.DisposeAsync().AsTask();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(runtime.Disposed);
+        blocker.TrySetResult(true);
+    }
+
+    [Fact]
     public async Task Workspace_MustBeTrusted_AndAdditionalRootsMustBeContained()
     {
         using var temp = new TemporaryDirectory();

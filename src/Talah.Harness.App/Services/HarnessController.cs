@@ -277,12 +277,24 @@ public sealed class HarnessController : IAsyncDisposable
         _lifetime.Cancel();
         if (_eventTask is not null)
         {
-            try { await _eventTask.ConfigureAwait(false); }
+            try { await _eventTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+            catch (TimeoutException) { ObserveLateFailure(_eventTask); }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         }
-        await _host.DisposeAsync().ConfigureAwait(false);
+        Task hostDisposal = _host.DisposeAsync().AsTask();
+        try { await hostDisposal.WaitAsync(TimeSpan.FromSeconds(16)).ConfigureAwait(false); }
+        catch (TimeoutException) { ObserveLateFailure(hostDisposal); }
         _settingsGate.Dispose();
         _lifetime.Dispose();
+    }
+
+    private static void ObserveLateFailure(Task task)
+    {
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public static string SafeFailure(Exception exception, string operation) => exception switch

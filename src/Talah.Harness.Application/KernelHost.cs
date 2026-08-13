@@ -21,6 +21,8 @@ public sealed record DurableElicitationRequest(ElicitationRequest Request, strin
 public sealed class KernelHost : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly TimeSpan AdapterShutdownTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan EventDrainTimeout = TimeSpan.FromSeconds(5);
     private readonly IReadOnlyDictionary<string, IKernelAdapterFactory> _factories;
     private readonly HarnessDatabase _database;
     private readonly CanonicalRepository _repository;
@@ -116,52 +118,18 @@ public sealed class KernelHost : IAsyncDisposable
     public async Task StopProfileAsync(KernelProfileKey key, CancellationToken cancellationToken = default)
     {
         EnsureReady();
+        HostedKernel? hosted;
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (!_kernels.TryRemove(key, out HostedKernel? hosted)) return;
-            Exception? disposalFailure = null;
-            try
-            {
-                await hosted.Adapter.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                disposalFailure = exception;
-            }
-
-            if (hosted.EventPump is not null)
-            {
-                try
-                {
-                    await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    hosted.Cancellation.Cancel();
-                    try { await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None).ConfigureAwait(false); }
-                    catch (Exception) { }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    hosted.Cancellation.Cancel();
-                    throw;
-                }
-                catch (Exception)
-                {
-                    // Event-pump failures are already retained as redacted profile diagnostics.
-                }
-            }
-
-            hosted.Cancellation.Cancel();
-            hosted.Cancellation.Dispose();
-            if (disposalFailure is not null)
-                throw new InvalidOperationException("The kernel adapter did not shut down cleanly; inspect redacted diagnostics.", disposalFailure);
+            if (!_kernels.TryRemove(key, out hosted)) return;
         }
         finally
         {
             _lifecycle.Release();
         }
+
+        await StopHostedKernelAsync(hosted, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<HostedKernelSnapshot>> GetSnapshotsAsync(CancellationToken cancellationToken = default)
@@ -445,16 +413,71 @@ public sealed class KernelHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
-        foreach (KernelProfileKey? key in _kernels.Keys.ToArray())
+        Task[] stops = _kernels.Keys.ToArray().Select(async key =>
         {
             try { await StopProfileAsync(key).ConfigureAwait(false); }
             catch (Exception) { }
-        }
+        }).ToArray();
+        await Task.WhenAll(stops).ConfigureAwait(false);
 
         _shutdown.Cancel();
         _disposed = true;
         _shutdown.Dispose();
         _lifecycle.Dispose();
+    }
+
+    private static async Task StopHostedKernelAsync(HostedKernel hosted, CancellationToken cancellationToken)
+    {
+        Exception? disposalFailure = null;
+        Task disposal = hosted.Adapter.DisposeAsync().AsTask();
+        try
+        {
+            await disposal.WaitAsync(AdapterShutdownTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            disposalFailure = new TimeoutException(
+                $"Kernel adapter shutdown exceeded {AdapterShutdownTimeout.TotalSeconds:0} seconds.",
+                exception);
+            hosted.Cancellation.Cancel();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            hosted.Cancellation.Cancel();
+            throw;
+        }
+        catch (Exception exception)
+        {
+            disposalFailure = exception;
+        }
+
+        if (hosted.EventPump is not null)
+        {
+            try
+            {
+                await hosted.EventPump.WaitAsync(EventDrainTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                hosted.Cancellation.Cancel();
+                try { await hosted.EventPump.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false); }
+                catch (Exception) { }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                hosted.Cancellation.Cancel();
+                throw;
+            }
+            catch (Exception)
+            {
+                // Event-pump failures are already retained as redacted profile diagnostics.
+            }
+        }
+
+        hosted.Cancellation.Cancel();
+        hosted.Cancellation.Dispose();
+        if (disposalFailure is not null)
+            throw new InvalidOperationException("The kernel adapter did not shut down cleanly; inspect redacted diagnostics.", disposalFailure);
     }
 
     private async Task PumpEventsAsync(HostedKernel hosted)
