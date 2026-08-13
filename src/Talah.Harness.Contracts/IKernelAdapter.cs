@@ -98,3 +98,18 @@ public interface IKernelAdapterFactory
         CancellationToken cancellationToken = default);
 }
 
+public interface IInteractiveLoginCompletionAdapter
+{
+    Task CompleteLoginAsync(
+        string loginId,
+        IReadOnlyDictionary<string, string>? parameters = null,
+        CancellationToken cancellationToken = default);
+}
+
+public interface ISessionRenameAdapter
+{
+    Task<KernelSessionSummary> RenameSessionAsync(
+        SessionRef session,
+        string title,
+        CancellationToken cancellationToken = default);
+}

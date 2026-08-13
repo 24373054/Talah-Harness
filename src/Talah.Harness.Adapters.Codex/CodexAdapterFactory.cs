@@ -16,7 +16,7 @@ public sealed class CodexAdapterFactory : IKernelAdapterFactory
             throw new ArgumentException($"Profile adapter must be '{AdapterId}'.", nameof(profile));
         }
 
-        var executable = profile.Environment.TryGetValue("TALAH_CODEX_PATH", out var configured)
+        string executable = profile.Environment.TryGetValue("TALAH_CODEX_PATH", out string? configured)
             ? configured
             : "codex";
         var transport = CodexProcessTransport.Start(executable, profile.Environment);

@@ -18,6 +18,22 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Runtime.Tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Persistence.Tests", "tests\Talah.Harness.Persistence.Tests\Talah.Harness.Persistence.Tests.csproj", "{189D1C01-62E3-4213-89D3-171C4BDFC23F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Application", "src\Talah.Harness.Application\Talah.Harness.Application.csproj", "{1C74D5C8-2949-4067-BA51-EE96A9F921F1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.Codex", "src\Talah.Harness.Adapters.Codex\Talah.Harness.Adapters.Codex.csproj", "{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.OpenCode", "src\Talah.Harness.Adapters.OpenCode\Talah.Harness.Adapters.OpenCode.csproj", "{C428C1AB-D393-4B19-B9FB-21DF3FA3B560}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.Tlah", "src\Talah.Harness.Adapters.Tlah\Talah.Harness.Adapters.Tlah.csproj", "{0C14B525-DE1B-413E-817A-14C548F451F3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Application.Tests", "tests\Talah.Harness.Application.Tests\Talah.Harness.Application.Tests.csproj", "{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.Codex.Tests", "tests\Talah.Harness.Adapters.Codex.Tests\Talah.Harness.Adapters.Codex.Tests.csproj", "{D2663643-C73A-4AF4-9958-148F23B74B6A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.OpenCode.Tests", "tests\Talah.Harness.Adapters.OpenCode.Tests\Talah.Harness.Adapters.OpenCode.Tests.csproj", "{84621CBA-D877-45F5-8249-0130AB28F113}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.Tlah.Tests", "tests\Talah.Harness.Adapters.Tlah.Tests\Talah.Harness.Adapters.Tlah.Tests.csproj", "{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,6 +64,38 @@ Global
 		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1C74D5C8-2949-4067-BA51-EE96A9F921F1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1C74D5C8-2949-4067-BA51-EE96A9F921F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1C74D5C8-2949-4067-BA51-EE96A9F921F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1C74D5C8-2949-4067-BA51-EE96A9F921F1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C428C1AB-D393-4B19-B9FB-21DF3FA3B560}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C428C1AB-D393-4B19-B9FB-21DF3FA3B560}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C428C1AB-D393-4B19-B9FB-21DF3FA3B560}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C428C1AB-D393-4B19-B9FB-21DF3FA3B560}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C14B525-DE1B-413E-817A-14C548F451F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C14B525-DE1B-413E-817A-14C548F451F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C14B525-DE1B-413E-817A-14C548F451F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C14B525-DE1B-413E-817A-14C548F451F3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2663643-C73A-4AF4-9958-148F23B74B6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2663643-C73A-4AF4-9958-148F23B74B6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2663643-C73A-4AF4-9958-148F23B74B6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2663643-C73A-4AF4-9958-148F23B74B6A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{84621CBA-D877-45F5-8249-0130AB28F113}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{84621CBA-D877-45F5-8249-0130AB28F113}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{84621CBA-D877-45F5-8249-0130AB28F113}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{84621CBA-D877-45F5-8249-0130AB28F113}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -58,5 +106,13 @@ Global
 		{D6A155AD-5B2C-4459-9AE0-07460D650A35} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
 		{7583210D-7627-4996-93F0-B594336BF71A} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
 		{189D1C01-62E3-4213-89D3-171C4BDFC23F} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{1C74D5C8-2949-4067-BA51-EE96A9F921F1} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{4D94EFD6-D613-42F9-BC83-B84D5F2FF2A9} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{C428C1AB-D393-4B19-B9FB-21DF3FA3B560} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{0C14B525-DE1B-413E-817A-14C548F451F3} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{F9E0B046-43AA-470B-9ECE-4F047AC2A6B7} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{D2663643-C73A-4AF4-9958-148F23B74B6A} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{84621CBA-D877-45F5-8249-0130AB28F113} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
 	EndGlobalSection
 EndGlobal

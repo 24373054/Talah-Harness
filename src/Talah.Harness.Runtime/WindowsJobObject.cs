@@ -1,6 +1,6 @@
-using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace Talah.Harness.Runtime;
 
@@ -29,8 +29,8 @@ public sealed partial class WindowsJobObject : IDisposable
                 LimitFlags = NativeMethods.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             }
         };
-        var size = Marshal.SizeOf<NativeMethods.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
-        var pointer = Marshal.AllocHGlobal(size);
+        int size = Marshal.SizeOf<NativeMethods.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
+        nint pointer = Marshal.AllocHGlobal(size);
         try
         {
             Marshal.StructureToPtr(information, pointer, false);

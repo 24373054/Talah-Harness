@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>Talah.Harness.Adapters.Codex</AssemblyName>
     <RootNamespace>Talah.Harness.Adapters.Codex</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Talah.Harness.Contracts\Talah.Harness.Contracts.csproj" />
+    <ProjectReference Include="..\Talah.Harness.Runtime\Talah.Harness.Runtime.csproj" />
   </ItemGroup>
 </Project>

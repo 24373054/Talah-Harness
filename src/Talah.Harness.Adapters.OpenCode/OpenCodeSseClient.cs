@@ -2,30 +2,22 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.OpenCode;
 
-public sealed class OpenCodeSseClient
+public sealed class OpenCodeSseClient(
+    OpenCodeApiClient api,
+    int maximumEventBytes = 1024 * 1024,
+    int bufferCapacity = 256,
+    TimeSpan? minimumReconnectDelay = null,
+    TimeSpan? maximumReconnectDelay = null)
 {
-    private readonly OpenCodeApiClient _api;
-    private readonly int _maximumEventBytes;
-    private readonly int _bufferCapacity;
-    private readonly TimeSpan _minimumReconnectDelay;
-    private readonly TimeSpan _maximumReconnectDelay;
-
-    public OpenCodeSseClient(
-        OpenCodeApiClient api,
-        int maximumEventBytes = 1024 * 1024,
-        int bufferCapacity = 256,
-        TimeSpan? minimumReconnectDelay = null,
-        TimeSpan? maximumReconnectDelay = null)
-    {
-        _api = api;
-        _maximumEventBytes = maximumEventBytes > 0 ? maximumEventBytes : throw new ArgumentOutOfRangeException(nameof(maximumEventBytes));
-        _bufferCapacity = bufferCapacity > 0 ? bufferCapacity : throw new ArgumentOutOfRangeException(nameof(bufferCapacity));
-        _minimumReconnectDelay = minimumReconnectDelay ?? TimeSpan.FromMilliseconds(250);
-        _maximumReconnectDelay = maximumReconnectDelay ?? TimeSpan.FromSeconds(5);
-    }
+    private readonly OpenCodeApiClient _api = api;
+    private readonly int _maximumEventBytes = maximumEventBytes > 0 ? maximumEventBytes : throw new ArgumentOutOfRangeException(nameof(maximumEventBytes));
+    private readonly int _bufferCapacity = bufferCapacity > 0 ? bufferCapacity : throw new ArgumentOutOfRangeException(nameof(bufferCapacity));
+    private readonly TimeSpan _minimumReconnectDelay = minimumReconnectDelay ?? TimeSpan.FromMilliseconds(250);
+    private readonly TimeSpan _maximumReconnectDelay = maximumReconnectDelay ?? TimeSpan.FromSeconds(5);
 
     public async IAsyncEnumerable<OpenCodeSseEvent> WatchAsync(
         string? directory,
@@ -39,9 +31,23 @@ public sealed class OpenCodeSseClient
             AllowSynchronousContinuations = false
         });
 
-        var producer = ProduceAsync(directory, channel.Writer, cancellationToken);
-        await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)) yield return item;
-        await producer.ConfigureAwait(false);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task producer = ProduceAsync(directory, channel.Writer, lifetime.Token);
+        try
+        {
+            await foreach (OpenCodeSseEvent? item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)) yield return item;
+        }
+        finally
+        {
+            lifetime.Cancel();
+            try
+            {
+                await producer.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+        }
     }
 
     private async Task ProduceAsync(string? directory, ChannelWriter<OpenCodeSseEvent> writer, CancellationToken cancellationToken)
@@ -49,26 +55,26 @@ public sealed class OpenCodeSseClient
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var seenOrder = new Queue<string>();
         string? lastEventId = null;
-        var reconnectDelay = _minimumReconnectDelay;
+        TimeSpan reconnectDelay = _minimumReconnectDelay;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    using var request = _api.CreateEventRequest(directory, lastEventId);
-                    using var response = await _api.SendEventRequestAsync(request, cancellationToken).ConfigureAwait(false);
+                    using HttpRequestMessage request = OpenCodeApiClient.CreateEventRequest(directory, lastEventId);
+                    using HttpResponseMessage response = await _api.SendEventRequestAsync(request, cancellationToken).ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode)
                     {
-                        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                        string body = await _api.ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
                         throw new OpenCodeApiException((int)response.StatusCode, "GET", "event", body);
                     }
 
-                    await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                    await foreach (var item in ParseAsync(stream, _maximumEventBytes, cancellationToken).ConfigureAwait(false))
+                    await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    await foreach (OpenCodeSseEvent? item in ParseAsync(stream, _maximumEventBytes, cancellationToken).ConfigureAwait(false))
                     {
                         lastEventId = item.Id ?? lastEventId;
-                        var deduplicationId = item.Id ?? TryGetVendorEventId(item.VendorJson);
+                        string? deduplicationId = item.Id ?? TryGetVendorEventId(item.VendorJson);
                         if (deduplicationId is not null && !seen.Add(deduplicationId)) continue;
                         if (deduplicationId is not null)
                         {
@@ -89,7 +95,7 @@ public sealed class OpenCodeSseClient
                 {
                     throw;
                 }
-                catch (Exception ex) when (ex is HttpRequestException or IOException or OpenCodeApiException)
+                catch (Exception ex) when (IsTransient(ex))
                 {
                     await Task.Delay(reconnectDelay, cancellationToken).ConfigureAwait(false);
                     reconnectDelay = TimeSpan.FromMilliseconds(
@@ -105,6 +111,14 @@ public sealed class OpenCodeSseClient
         }
     }
 
+    private static bool IsTransient(Exception exception) => exception switch
+    {
+        HttpRequestException => true,
+        IOException => true,
+        OpenCodeApiException api => api.StatusCode is 408 or 425 or 429 || api.StatusCode >= 500,
+        _ => false
+    };
+
     public static async IAsyncEnumerable<OpenCodeSseEvent> ParseAsync(
         Stream stream,
         int maximumEventBytes,
@@ -114,16 +128,12 @@ public sealed class OpenCodeSseClient
         string? id = null;
         string? eventName = null;
         var data = new StringBuilder();
-        var bytes = 0;
+        int bytes = 0;
 
-        while (true)
+        await foreach (BoundedLine? boundedLine in BoundedLineReader.ReadLinesAsync(reader, maximumEventBytes, cancellationToken).ConfigureAwait(false))
         {
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            if (line is null)
-            {
-                if (data.Length > 0) yield return CreateEvent(id, eventName, data.ToString());
-                yield break;
-            }
+            if (boundedLine.IsTruncated) throw new OpenCodePayloadTooLargeException(maximumEventBytes);
+            string line = boundedLine.Text;
 
             bytes = checked(bytes + Encoding.UTF8.GetByteCount(line) + 1);
             if (bytes > maximumEventBytes) throw new OpenCodePayloadTooLargeException(maximumEventBytes);
@@ -139,9 +149,9 @@ public sealed class OpenCodeSseClient
             }
 
             if (line[0] == ':') continue;
-            var separator = line.IndexOf(':', StringComparison.Ordinal);
-            var field = separator < 0 ? line : line[..separator];
-            var value = separator < 0 ? string.Empty : line[(separator + 1)..];
+            int separator = line.IndexOf(':', StringComparison.Ordinal);
+            string field = separator < 0 ? line : line[..separator];
+            string value = separator < 0 ? string.Empty : line[(separator + 1)..];
             if (value.StartsWith(' ')) value = value[1..];
             switch (field)
             {
@@ -153,6 +163,8 @@ public sealed class OpenCodeSseClient
                     break;
             }
         }
+
+        if (data.Length > 0) yield return CreateEvent(id, eventName, data.ToString());
     }
 
     private static OpenCodeSseEvent CreateEvent(string? id, string? eventName, string data)
@@ -169,7 +181,7 @@ public sealed class OpenCodeSseClient
     }
 
     private static string? TryGetVendorEventId(JsonElement json)
-        => json.ValueKind == JsonValueKind.Object && json.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+        => json.ValueKind == JsonValueKind.Object && json.TryGetProperty("id", out JsonElement id) && id.ValueKind == JsonValueKind.String
             ? id.GetString()
             : null;
 }

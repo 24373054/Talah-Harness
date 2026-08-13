@@ -1,15 +1,18 @@
 using System.Diagnostics;
 using System.Text;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.Codex;
 
 internal sealed class CodexProcessTransport : ICodexTransport
 {
     private readonly Process _process;
+    private readonly WindowsJobObject _job;
 
-    private CodexProcessTransport(Process process)
+    private CodexProcessTransport(Process process, WindowsJobObject job)
     {
         _process = process;
+        _job = job;
     }
 
     public TextWriter Input => _process.StandardInput;
@@ -40,20 +43,36 @@ internal sealed class CodexProcessTransport : ICodexTransport
         startInfo.ArgumentList.Add("app-server");
         startInfo.ArgumentList.Add("--stdio");
 
-        foreach (var pair in environment)
+        startInfo.Environment.Clear();
+        foreach (string name in EnvironmentAllowList) CopyEnvironmentIfPresent(startInfo, name);
+        foreach (KeyValuePair<string, string> pair in environment)
         {
             startInfo.Environment[pair.Key] = pair.Value;
         }
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        if (!process.Start())
+        var job = new WindowsJobObject();
+        try
         {
-            process.Dispose();
-            throw new InvalidOperationException("Failed to start Codex App Server.");
+            if (!process.Start()) throw new InvalidOperationException("Failed to start Codex App Server.");
+            job.Assign(process);
+            process.StandardInput.AutoFlush = true;
+            return new CodexProcessTransport(process, job);
         }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
 
-        process.StandardInput.AutoFlush = true;
-        return new CodexProcessTransport(process);
+            process.Dispose();
+            job.Dispose();
+            throw;
+        }
     }
 
     internal static string ResolveExecutable(string executable)
@@ -63,22 +82,22 @@ internal sealed class CodexProcessTransport : ICodexTransport
             return executable;
         }
 
-        var explicitDirectory = Path.GetDirectoryName(executable);
-        var fileName = Path.GetFileNameWithoutExtension(executable);
-        var searchDirectories = !string.IsNullOrEmpty(explicitDirectory)
-            ? new[] { Path.GetFullPath(explicitDirectory) }
+        string? explicitDirectory = Path.GetDirectoryName(executable);
+        string fileName = Path.GetFileNameWithoutExtension(executable);
+        string[] searchDirectories = !string.IsNullOrEmpty(explicitDirectory)
+            ? [Path.GetFullPath(explicitDirectory)]
             : (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        foreach (var directory in searchDirectories)
+        foreach (string directory in searchDirectories)
         {
-            var directExe = Path.Combine(directory, fileName + ".exe");
+            string directExe = Path.Combine(directory, fileName + ".exe");
             if (File.Exists(directExe))
             {
                 return directExe;
             }
 
-            var nativePackageRoot = Path.Combine(
+            string nativePackageRoot = Path.Combine(
                 directory,
                 "node_modules",
                 "@openai",
@@ -91,7 +110,7 @@ internal sealed class CodexProcessTransport : ICodexTransport
 
             try
             {
-                var nativeExe = Directory.EnumerateFiles(nativePackageRoot, "codex.exe", SearchOption.AllDirectories)
+                string? nativeExe = Directory.EnumerateFiles(nativePackageRoot, "codex.exe", SearchOption.AllDirectories)
                     .FirstOrDefault(path => path.Contains(
                         $"{Path.DirectorySeparatorChar}vendor{Path.DirectorySeparatorChar}",
                         StringComparison.OrdinalIgnoreCase));
@@ -123,14 +142,29 @@ internal sealed class CodexProcessTransport : ICodexTransport
                 }
                 catch (OperationCanceledException)
                 {
-                    _process.Kill(entireProcessTree: true);
+                    _job.Terminate();
                     await _process.WaitForExitAsync().ConfigureAwait(false);
                 }
             }
         }
         finally
         {
+            _job.Dispose();
             _process.Dispose();
         }
     }
+
+    private static void CopyEnvironmentIfPresent(ProcessStartInfo startInfo, string name)
+    {
+        string? value = Environment.GetEnvironmentVariable(name);
+        if (!string.IsNullOrEmpty(value)) startInfo.Environment[name] = value;
+    }
+
+    private static string[] EnvironmentAllowList { get; } =
+    [
+        "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "USERPROFILE",
+        "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA",
+        "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "PATH", "PATHEXT",
+        "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"
+    ];
 }

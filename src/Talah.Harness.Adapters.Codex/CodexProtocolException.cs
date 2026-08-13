@@ -13,13 +13,7 @@ public sealed class CodexProtocolException : Exception
     }
 }
 
-public sealed class CodexRpcException : Exception
+public sealed class CodexRpcException(int code, string message) : Exception($"Codex App Server error {code}: {message}")
 {
-    public CodexRpcException(int code, string message)
-        : base($"Codex App Server error {code}: {message}")
-    {
-        Code = code;
-    }
-
-    public int Code { get; }
+    public int Code { get; } = code;
 }

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.Codex;
 
@@ -29,10 +30,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         int maximumMessageBytes = DefaultMaximumMessageBytes)
     {
         ArgumentNullException.ThrowIfNull(transport);
-        if (maximumMessageBytes <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumMessageBytes));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumMessageBytes);
 
         _transport = transport;
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30);
@@ -61,7 +59,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        var id = Interlocked.Increment(ref _nextRequestId);
+        long id = Interlocked.Increment(ref _nextRequestId);
         var source = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pending.TryAdd(id, source))
         {
@@ -108,7 +106,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private async Task<JsonElement> InitializeCoreAsync(string hostVersion, CancellationToken cancellationToken)
     {
-        var result = await RequestAsync(
+        JsonElement result = await RequestAsync(
             "initialize",
             new
             {
@@ -126,8 +124,8 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private async Task WriteAsync(object value, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(value, JsonOptions);
-        var bytes = Encoding.UTF8.GetByteCount(json);
+        string json = JsonSerializer.Serialize(value, JsonOptions);
+        int bytes = Encoding.UTF8.GetByteCount(json);
         if (bytes > _maximumMessageBytes)
         {
             throw new CodexProtocolException(
@@ -151,15 +149,20 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         Exception? failure = null;
         try
         {
-            while (!_lifetime.IsCancellationRequested)
+            await foreach (BoundedLine? framedLine in BoundedLineReader.ReadLinesAsync(
+                               _transport.Output,
+                               _maximumMessageBytes,
+                               _lifetime.Token).ConfigureAwait(false))
             {
-                var line = await _transport.Output.ReadLineAsync(_lifetime.Token).ConfigureAwait(false);
-                if (line is null)
+                if (framedLine.IsTruncated)
                 {
-                    break;
+                    throw new CodexProtocolException(
+                        $"Incoming Codex message exceeded the {_maximumMessageBytes}-character framing limit; " +
+                        $"{framedLine.DroppedCharacters} characters were discarded.");
                 }
 
-                var bytes = Encoding.UTF8.GetByteCount(line);
+                string line = framedLine.Text;
+                int bytes = Encoding.UTF8.GetByteCount(line);
                 if (bytes > _maximumMessageBytes)
                 {
                     throw new CodexProtocolException(
@@ -179,7 +182,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
                 using (document)
                 {
-                    var root = document.RootElement;
+                    JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object)
                     {
                         DiagnosticReceived?.Invoke("Ignored non-object Codex message.");
@@ -206,7 +209,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
             if (failure is not null)
             {
                 DiagnosticReceived?.Invoke(Redact(failure.Message));
-                foreach (var pair in _pending)
+                foreach (KeyValuePair<long, TaskCompletionSource<JsonElement>> pair in _pending)
                 {
                     pair.Value.TrySetException(failure);
                 }
@@ -216,16 +219,16 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private Task DispatchAsync(JsonElement root)
     {
-        if (root.TryGetProperty("method", out var methodElement) &&
+        if (root.TryGetProperty("method", out JsonElement methodElement) &&
             methodElement.ValueKind == JsonValueKind.String)
         {
-            var method = methodElement.GetString()!;
-            var parameters = root.TryGetProperty("params", out var paramsElement)
+            string method = methodElement.GetString()!;
+            JsonElement parameters = root.TryGetProperty("params", out JsonElement paramsElement)
                 ? paramsElement.Clone()
                 : EmptyObject();
-            if (root.TryGetProperty("id", out var requestId))
+            if (root.TryGetProperty("id", out JsonElement requestId))
             {
-                var handler = ServerRequestReceived;
+                Func<CodexServerRequest, Task>? handler = ServerRequestReceived;
                 if (handler is null)
                 {
                     return RespondErrorAsync(requestId.Clone(), -32601, $"Unsupported server request: {method}");
@@ -252,21 +255,21 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
             return DispatchNotificationAsync(method, parameters, root.Clone());
         }
 
-        if (root.TryGetProperty("id", out var idElement) &&
-            TryGetInt64Id(idElement, out var id) &&
-            _pending.TryRemove(id, out var source))
+        if (root.TryGetProperty("id", out JsonElement idElement) &&
+            TryGetInt64Id(idElement, out long id) &&
+            _pending.TryRemove(id, out TaskCompletionSource<JsonElement>? source))
         {
-            if (root.TryGetProperty("error", out var error))
+            if (root.TryGetProperty("error", out JsonElement error))
             {
-                var code = error.TryGetProperty("code", out var codeElement) && codeElement.TryGetInt32(out var parsed)
+                int code = error.TryGetProperty("code", out JsonElement codeElement) && codeElement.TryGetInt32(out int parsed)
                     ? parsed
                     : -32603;
-                var message = error.TryGetProperty("message", out var messageElement)
+                string message = error.TryGetProperty("message", out JsonElement messageElement)
                     ? messageElement.GetString() ?? "Unknown error"
                     : "Unknown error";
                 source.TrySetException(new CodexRpcException(code, Redact(message)));
             }
-            else if (root.TryGetProperty("result", out var result))
+            else if (root.TryGetProperty("result", out JsonElement result))
             {
                 source.TrySetResult(result.Clone());
             }
@@ -284,14 +287,14 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private async Task DispatchNotificationAsync(string method, JsonElement parameters, JsonElement vendorData)
     {
-        var handlers = NotificationReceived;
+        Func<string, JsonElement, JsonElement, Task>? handlers = NotificationReceived;
         if (handlers is null)
         {
             DiagnosticReceived?.Invoke($"Ignored Codex notification '{method}'.");
             return;
         }
 
-        foreach (var handler in handlers.GetInvocationList().Cast<Func<string, JsonElement, JsonElement, Task>>())
+        foreach (Func<string, JsonElement, JsonElement, Task> handler in handlers.GetInvocationList().Cast<Func<string, JsonElement, JsonElement, Task>>())
         {
             try
             {
@@ -309,15 +312,15 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
     {
         try
         {
-            while (!_lifetime.IsCancellationRequested)
+            await foreach (BoundedLine? line in BoundedLineReader.ReadLinesAsync(
+                               _transport.Error,
+                               65_536,
+                               _lifetime.Token).ConfigureAwait(false))
             {
-                var line = await _transport.Error.ReadLineAsync(_lifetime.Token).ConfigureAwait(false);
-                if (line is null)
-                {
-                    return;
-                }
-
-                DiagnosticReceived?.Invoke(Redact(line));
+                string suffix = line.IsTruncated
+                    ? $" [stderr truncated; {line.DroppedCharacters} characters discarded]"
+                    : string.Empty;
+                DiagnosticReceived?.Invoke(Redact(line.Text) + suffix);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -332,14 +335,14 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
             return value;
         }
 
-        var result = value;
-        foreach (var marker in new[] { "sk-", "Bearer ", "apiKey\":\"", "accessToken\":\"" })
+        string result = value;
+        foreach (string? marker in new[] { "sk-", "Bearer ", "apiKey\":\"", "accessToken\":\"" })
         {
-            var start = 0;
+            int start = 0;
             while ((start = result.IndexOf(marker, start, StringComparison.OrdinalIgnoreCase)) >= 0)
             {
-                var secretStart = start + marker.Length;
-                var end = secretStart;
+                int secretStart = start + marker.Length;
+                int end = secretStart;
                 while (end < result.Length && !char.IsWhiteSpace(result[end]) && result[end] != '"' && result[end] != ',')
                 {
                     end++;
@@ -380,7 +383,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         }
 
         _lifetime.Cancel();
-        foreach (var pair in _pending)
+        foreach (KeyValuePair<long, TaskCompletionSource<JsonElement>> pair in _pending)
         {
             pair.Value.TrySetCanceled();
         }

@@ -9,23 +9,26 @@ using TLAHStudio.Core.Services;
 
 namespace Talah.Harness.Adapters.Tlah;
 
-public sealed class TlahKernelAdapter : IKernelAdapter
+public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime) : IKernelAdapter, ISessionRenameAdapter
 {
     public const string Id = "tlah";
     private const string NativeVersion = "4.16.0";
-    private readonly ITlahNativeRuntime _runtime;
-    private readonly Channel<KernelEvent> _events = Channel.CreateUnbounded<KernelEvent>();
+    private readonly ITlahNativeRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+    private readonly Channel<KernelEvent> _events = Channel.CreateBounded<KernelEvent>(
+        new BoundedChannelOptions(4_096)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = false,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
+        });
+    private readonly CancellationTokenSource _eventLifetime = new();
     private readonly ConcurrentDictionary<string, ActiveTurn> _activeTurns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingApproval> _approvals = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Guid, string> _workspaceRoots = new();
     private KernelInitializationContext? _context;
     private long _sequence;
     private bool _disposed;
-
-    public TlahKernelAdapter(ITlahNativeRuntime runtime)
-    {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-    }
 
     public string AdapterId => Id;
 
@@ -105,7 +108,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     {
         EnsureInitialized();
         bool configured = await _runtime.IsConfiguredAsync(cancellationToken).ConfigureAwait(false);
-        var settings = await _runtime.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+        GlobalSettingsDto settings = await _runtime.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
         return new AuthenticationState(
             configured ? AuthenticationStatus.SignedIn : AuthenticationStatus.SignedOut,
             configured ? settings.Provider : null,
@@ -137,7 +140,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
             !string.Equals(credential.BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(credential.BaseUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Provider base URIs must use HTTP or HTTPS.", nameof(credential));
-        var providers = await _runtime.GetProvidersAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ProviderInfo> providers = await _runtime.GetProvidersAsync(cancellationToken).ConfigureAwait(false);
         if (!providers.Any(p => string.Equals(p.Key, credential.ProviderId, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("The requested provider is not supported by native TLAH.", nameof(credential));
         try
@@ -163,8 +166,8 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async Task<IReadOnlyList<KernelModel>> ListModelsAsync(CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        var settings = await _runtime.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
-        var models = await _runtime.GetModelsAsync(cancellationToken).ConfigureAwait(false);
+        GlobalSettingsDto settings = await _runtime.GetSettingsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string> models = await _runtime.GetModelsAsync(cancellationToken).ConfigureAwait(false);
         return models.Select(model => new KernelModel(model, model, $"Native {settings.Provider} model", model == settings.Model,
             new Dictionary<string, string> { ["provider"] = settings.Provider })).ToArray();
     }
@@ -174,8 +177,8 @@ public sealed class TlahKernelAdapter : IKernelAdapter
         EnsureInitialized();
         int offset = ParseCursor(request.Cursor);
         int size = Math.Clamp(request.PageSize, 1, 200);
-        var chats = await _runtime.ListChatsAsync(includeArchived: true, cancellationToken).ConfigureAwait(false);
-        var page = chats.Skip(offset).Take(size).Select(MapSession).ToArray();
+        IReadOnlyList<ChatSummaryDto> chats = await _runtime.ListChatsAsync(includeArchived: true, cancellationToken).ConfigureAwait(false);
+        KernelSessionSummary[] page = chats.Skip(offset).Take(size).Select(MapSession).ToArray();
         int next = offset + page.Length;
         return new ResultPage<KernelSessionSummary>(page, next < chats.Count ? next.ToString() : null, next < chats.Count);
     }
@@ -184,11 +187,11 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     {
         EnsureInitialized();
         string root = ValidateWorkspace(request.Workspace);
-        var chat = await _runtime.CreateChatAsync(string.IsNullOrWhiteSpace(request.Title) ? "New Chat" : request.Title.Trim(), root, cancellationToken).ConfigureAwait(false);
+        Chat chat = await _runtime.CreateChatAsync(string.IsNullOrWhiteSpace(request.Title) ? "New Chat" : request.Title.Trim(), root, cancellationToken).ConfigureAwait(false);
         _workspaceRoots[chat.Id] = root;
         if (!string.IsNullOrWhiteSpace(request.ModelId))
             await _runtime.SetModelAsync(chat.Id, request.ModelId, cancellationToken).ConfigureAwait(false);
-        var summary = MapSession(chat, request.Workspace.WorkspaceId);
+        KernelSessionSummary summary = MapSession(chat, request.Workspace.WorkspaceId);
         Publish(chat.Id, null, null, KernelEventKind.SessionCreated, new SessionEventData(summary));
         return summary;
     }
@@ -196,7 +199,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async Task<KernelSessionSummary> ResumeSessionAsync(SessionRef session, CancellationToken cancellationToken = default)
     {
         Guid id = ValidateSession(session);
-        var chat = await _runtime.GetChatAsync(id, cancellationToken).ConfigureAwait(false);
+        Chat chat = await _runtime.GetChatAsync(id, cancellationToken).ConfigureAwait(false);
         return MapSession(chat);
     }
 
@@ -210,8 +213,21 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async Task ArchiveSessionAsync(SessionRef session, CancellationToken cancellationToken = default)
     {
         Guid id = ValidateSession(session);
-        var chat = await _runtime.SetArchivedAsync(id, true, cancellationToken).ConfigureAwait(false);
+        Chat chat = await _runtime.SetArchivedAsync(id, true, cancellationToken).ConfigureAwait(false);
         Publish(id, null, null, KernelEventKind.SessionMetadataChanged, new SessionEventData(MapSession(chat)));
+    }
+
+    public async Task<KernelSessionSummary> RenameSessionAsync(
+        SessionRef session,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        Guid id = ValidateSession(session);
+        if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("A session title is required.", nameof(title));
+        Chat chat = await _runtime.RenameAsync(id, title.Trim(), cancellationToken).ConfigureAwait(false);
+        KernelSessionSummary summary = MapSession(chat, session.WorkspaceId);
+        Publish(id, null, null, KernelEventKind.SessionMetadataChanged, new SessionEventData(summary));
+        return summary;
     }
 
     public async Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
@@ -243,7 +259,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async Task CancelTurnAsync(SessionRef session, string nativeTurnId, CancellationToken cancellationToken = default)
     {
         _ = ValidateSession(session);
-        if (!_activeTurns.TryGetValue(nativeTurnId, out var active))
+        if (!_activeTurns.TryGetValue(nativeTurnId, out ActiveTurn? active))
             throw new InvalidOperationException("The requested turn is not active.");
         active.Cancellation.Cancel();
         if (active.RunId is Guid runId)
@@ -253,13 +269,13 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async Task RespondToPermissionAsync(PermissionResponse response, CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        if (!_approvals.TryRemove(response.PermissionId, out var pending))
+        if (!_approvals.TryRemove(response.PermissionId, out PendingApproval? pending))
             throw new InvalidOperationException("The permission request is unknown or has already been answered.");
         bool approved = response.ChoiceId is "allow-once" or "allow-session" or "allow-amended";
         string? amended = response.ChoiceId == "allow-amended" ? response.AmendedInput?.GetRawText() : null;
         await _runtime.SetApprovalAsync(pending.InvocationId, approved,
             response.ChoiceId == "allow-session" ? "chat" : "once", amended, cancellationToken).ConfigureAwait(false);
-        var active = _activeTurns.GetValueOrDefault(pending.TurnId)
+        ActiveTurn active = _activeTurns.GetValueOrDefault(pending.TurnId)
             ?? throw new InvalidOperationException("The turn associated with this approval is no longer active.");
         active.Execution = ResumeTurnAsync(active, pending.RunId);
     }
@@ -276,8 +292,8 @@ public sealed class TlahKernelAdapter : IKernelAdapter
         Guid chatId = ValidateSession(session);
         int offset = ParseCursor(request.Cursor);
         int size = Math.Clamp(request.PageSize, 1, 200);
-        var messages = await _runtime.ReadMessagesAsync(chatId, cancellationToken).ConfigureAwait(false);
-        var page = messages.Skip(offset).Take(size).Select(MapMessage).ToArray();
+        IReadOnlyList<Message> messages = await _runtime.ReadMessagesAsync(chatId, cancellationToken).ConfigureAwait(false);
+        KernelItem[] page = messages.Skip(offset).Take(size).Select(MapMessage).ToArray();
         int next = offset + page.Length;
         return new ResultPage<KernelItem>(page, next < messages.Count ? next.ToString() : null, next < messages.Count);
     }
@@ -292,7 +308,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     public async IAsyncEnumerable<KernelEvent> WatchEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EnsureInitialized();
-        await foreach (var item in _events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (KernelEvent? item in _events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             yield return item;
     }
 
@@ -301,17 +317,19 @@ public sealed class TlahKernelAdapter : IKernelAdapter
         if (_disposed)
             return;
         _disposed = true;
-        foreach (var turn in _activeTurns.Values)
+        _eventLifetime.Cancel();
+        foreach (ActiveTurn turn in _activeTurns.Values)
             turn.Cancellation.Cancel();
         Task[] tasks = _activeTurns.Values.Select(turn => turn.Execution).Where(task => task is not null).Cast<Task>().ToArray();
         try { await Task.WhenAll(tasks).ConfigureAwait(false); }
         catch (OperationCanceledException) { }
         catch { }
-        foreach (var turn in _activeTurns.Values)
+        foreach (ActiveTurn turn in _activeTurns.Values)
             turn.Cancellation.Dispose();
         _activeTurns.Clear();
         _approvals.Clear();
         _events.Writer.TryComplete();
+        _eventLifetime.Dispose();
         await _runtime.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -326,7 +344,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
         });
         try
         {
-            var result = await _runtime.RunAsync(chatId, prompt, BuildOptions(options, output, progress), active.Cancellation.Token).ConfigureAwait(false);
+            SendMessageResult result = await _runtime.RunAsync(chatId, prompt, BuildOptions(options, output, progress), active.Cancellation.Token).ConfigureAwait(false);
             CompleteFromResult(active, result);
         }
         catch (OperationCanceledException)
@@ -353,7 +371,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
                     Publish(active.SessionId, active.TurnId, null, KernelEventKind.ContentDelta,
                         new ContentDeltaEventData(update.EventType == LlmStreamEventTypes.ThinkingDelta ? "reasoning" : "assistant", update.Delta, "markdown"));
             });
-            var result = await _runtime.ResumeRunAsync(runId, BuildOptions(new TurnOptions(null, null, null, null), output, progress), active.Cancellation.Token).ConfigureAwait(false);
+            SendMessageResult result = await _runtime.ResumeRunAsync(runId, BuildOptions(new TurnOptions(null, null, null, null), output, progress), active.Cancellation.Token).ConfigureAwait(false);
             CompleteFromResult(active, result);
         }
         catch (OperationCanceledException)
@@ -474,19 +492,28 @@ public sealed class TlahKernelAdapter : IKernelAdapter
 
     private void Publish(Guid? sessionId, string? turnId, Guid? itemId, KernelEventKind kind, KernelEventData data)
     {
-        var context = _context;
+        KernelInitializationContext? context = _context;
         if (context is null || _disposed)
             return;
-        _events.Writer.TryWrite(new KernelEvent(
-            Id,
-            context.Profile.ProfileId,
-            sessionId?.ToString("D"),
-            turnId,
-            itemId?.ToString("D"),
-            Interlocked.Increment(ref _sequence),
-            DateTimeOffset.UtcNow,
-            kind,
-            data));
+        try
+        {
+            _events.Writer.WriteAsync(new KernelEvent(
+                Id,
+                context.Profile.ProfileId,
+                sessionId?.ToString("D"),
+                turnId,
+                itemId?.ToString("D"),
+                Interlocked.Increment(ref _sequence),
+                DateTimeOffset.UtcNow,
+                kind,
+                data), _eventLifetime.Token).AsTask().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (_eventLifetime.IsCancellationRequested)
+        {
+        }
+        catch (ChannelClosedException) when (_disposed)
+        {
+        }
     }
 
     private KernelSessionSummary MapSession(ChatSummaryDto chat) => new(
@@ -523,7 +550,7 @@ public sealed class TlahKernelAdapter : IKernelAdapter
             message.TurnId?.ToString("D"));
     }
 
-    private string ValidateWorkspace(WorkspaceDescriptor workspace)
+    private static string ValidateWorkspace(WorkspaceDescriptor workspace)
     {
         if (!workspace.IsTrusted)
             throw new UnauthorizedAccessException("TLAH native tools require an explicitly trusted workspace.");
@@ -539,11 +566,11 @@ public sealed class TlahKernelAdapter : IKernelAdapter
 
     private Guid ValidateSession(SessionRef session)
     {
-        var context = EnsureInitialized();
+        KernelInitializationContext context = EnsureInitialized();
         if (!string.Equals(session.AdapterId, Id, StringComparison.Ordinal) ||
             !string.Equals(session.ProfileId, context.Profile.ProfileId, StringComparison.Ordinal))
             throw new ArgumentException("The session belongs to another adapter or profile.", nameof(session));
-        if (!Guid.TryParse(session.NativeSessionId, out var id))
+        if (!Guid.TryParse(session.NativeSessionId, out Guid id))
             throw new ArgumentException("Native TLAH session ids are GUIDs.", nameof(session));
         return id;
     }
@@ -600,17 +627,17 @@ public sealed class TlahKernelAdapter : IKernelAdapter
     }
 
     private static string? TryString(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String
             ? property.GetString()
             : null;
 
     private static string? TryObject(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property)
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property)
             ? property.GetRawText()
             : null;
 
     private static long? TryLong(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) && property.TryGetInt64(out long result)
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.TryGetInt64(out long result)
             ? result
             : null;
 

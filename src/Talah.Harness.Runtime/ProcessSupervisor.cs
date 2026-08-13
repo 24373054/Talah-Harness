@@ -80,17 +80,17 @@ public sealed class ProcessSupervisor : IAsyncDisposable
 
     public KernelHealth GetHealth()
     {
-        var running = IsRunning;
-        var lastExit = _exit.Task.IsCompletedSuccessfully ? _exit.Task.Result : null;
+        bool running = IsRunning;
+        ProcessExitInformation? lastExit = _exit.Task.IsCompletedSuccessfully ? _exit.Task.Result : null;
         var diagnostics = new List<KernelDiagnostic>();
-        var stderr = StandardError;
+        BoundedText stderr = StandardError;
         if (stderr.IsTruncated)
         {
             diagnostics.Add(new KernelDiagnostic("runtime.stderr.truncated", DiagnosticSeverity.Warning,
                 $"Standard error was bounded; {stderr.DroppedCharacters} characters were discarded."));
         }
 
-        var protocolDropped = ProtocolMessagesDropped;
+        long protocolDropped = ProtocolMessagesDropped;
         if (protocolDropped != 0)
         {
             diagnostics.Add(new KernelDiagnostic("runtime.protocol.messages-dropped", DiagnosticSeverity.Warning,
@@ -135,14 +135,14 @@ public sealed class ProcessSupervisor : IAsyncDisposable
             startInfo.Environment.Clear();
             if (_options.Environment is not null)
             {
-                foreach (var pair in _options.Environment)
+                foreach (KeyValuePair<string, string> pair in _options.Environment)
                 {
                     ValidateEnvironmentVariable(pair.Key, pair.Value);
                     startInfo.Environment[pair.Key] = pair.Value;
                 }
             }
 
-            foreach (var argument in _options.Arguments) startInfo.ArgumentList.Add(argument);
+            foreach (string argument in _options.Arguments) startInfo.ArgumentList.Add(argument);
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.Exited += OnExited;
@@ -185,7 +185,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(value);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var process = _process;
+        Process? process = _process;
         if (process is null || process.HasExited) throw new InvalidOperationException("The sidecar is not running.");
         await process.StandardInput.WriteAsync(value.AsMemory(), cancellationToken).ConfigureAwait(false);
         await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -200,7 +200,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var process = _process;
+            Process? process = _process;
             if (process is null) return null;
             if (!process.HasExited)
             {
@@ -210,7 +210,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
                     await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
                 process.StandardInput.Close();
-                var timeout = (_options.Timeouts ?? ProcessTimeouts.Default).Shutdown;
+                TimeSpan timeout = (_options.Timeouts ?? ProcessTimeouts.Default).Shutdown;
                 try
                 {
                     await _exit.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
@@ -243,7 +243,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
             _disposed = true;
             _disposeCancellation.Cancel();
             _protocol.Writer.TryComplete();
-            var pumps = new[] { _standardErrorPump, _standardOutputPump }.Where(static task => task is not null).Cast<Task>();
+            IEnumerable<Task> pumps = new[] { _standardErrorPump, _standardOutputPump }.Where(static task => task is not null).Cast<Task>();
             try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch (OperationCanceledException) { } catch (TimeoutException) { }
             _job?.Dispose();
             _process?.Dispose();
@@ -254,12 +254,12 @@ public sealed class ProcessSupervisor : IAsyncDisposable
 
     private async Task PumpStandardErrorAsync(TextReader reader, CancellationToken cancellationToken)
     {
-        var buffer = new char[4096];
+        char[] buffer = new char[4096];
         try
         {
             while (true)
             {
-                var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                int read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
                 if (read == 0) return;
                 _standardError.Append(buffer.AsSpan(0, read));
             }
@@ -273,7 +273,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
     {
         try
         {
-            await foreach (var line in BoundedLineReader.ReadLinesAsync(reader, _options.MaximumMessageLength, cancellationToken).ConfigureAwait(false))
+            await foreach (BoundedLine? line in BoundedLineReader.ReadLinesAsync(reader, _options.MaximumMessageLength, cancellationToken).ConfigureAwait(false))
             {
                 var message = new ProcessMessage(
                     Interlocked.Increment(ref _messageSequence), line.Text, line.IsTruncated,

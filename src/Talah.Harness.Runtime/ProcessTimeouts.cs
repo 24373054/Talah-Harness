@@ -34,17 +34,10 @@ public sealed record ProcessTimeouts(
     };
 }
 
-public sealed class ProcessOperationTimeoutException : TimeoutException
+public sealed class ProcessOperationTimeoutException(ProcessOperation operation, TimeSpan timeout) : TimeoutException($"The {operation.ToString().ToLowerInvariant()} operation exceeded its {timeout} timeout.")
 {
-    public ProcessOperationTimeoutException(ProcessOperation operation, TimeSpan timeout)
-        : base($"The {operation.ToString().ToLowerInvariant()} operation exceeded its {timeout} timeout.")
-    {
-        Operation = operation;
-        Timeout = timeout;
-    }
-
-    public ProcessOperation Operation { get; }
-    public TimeSpan Timeout { get; }
+    public ProcessOperation Operation { get; } = operation;
+    public TimeSpan Timeout { get; } = timeout;
 }
 
 public static class ProcessTimeout
@@ -57,7 +50,7 @@ public static class ProcessTimeout
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(timeouts);
-        var timeout = timeouts.For(operation);
+        TimeSpan timeout = timeouts.For(operation);
         try
         {
             await task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);

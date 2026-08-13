@@ -5,9 +5,9 @@ namespace Talah.Harness.Adapters.Codex;
 internal static class VendorJson
 {
     private static readonly string[] SecretNames =
-    {
+    [
         "apiKey", "accessToken", "refreshToken", "token", "authorization", "secret"
-    };
+    ];
 
     public static JsonElement Sanitize(JsonElement value)
     {
@@ -34,7 +34,7 @@ internal static class VendorJson
         {
             case JsonValueKind.Object:
                 writer.WriteStartObject();
-                foreach (var property in value.EnumerateObject())
+                foreach (JsonProperty property in value.EnumerateObject())
                 {
                     writer.WritePropertyName(property.Name);
                     WriteSanitized(writer, property.Value, property.Name);
@@ -44,7 +44,7 @@ internal static class VendorJson
                 break;
             case JsonValueKind.Array:
                 writer.WriteStartArray();
-                foreach (var item in value.EnumerateArray())
+                foreach (JsonElement item in value.EnumerateArray())
                 {
                     WriteSanitized(writer, item, propertyName);
                 }

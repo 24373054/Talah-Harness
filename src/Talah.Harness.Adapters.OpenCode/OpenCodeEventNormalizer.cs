@@ -3,24 +3,22 @@ using Talah.Harness.Contracts;
 
 namespace Talah.Harness.Adapters.OpenCode;
 
-public sealed class OpenCodeEventNormalizer
+public sealed class OpenCodeEventNormalizer(string profileId)
 {
-    private readonly string _profileId;
+    private readonly string _profileId = profileId;
     private long _sequence;
-
-    public OpenCodeEventNormalizer(string profileId) => _profileId = profileId;
 
     public IReadOnlyList<KernelEvent> Normalize(OpenCodeSseEvent source)
     {
-        var root = source.VendorJson;
-        var type = String(root, "type") ?? source.Event ?? "unknown";
-        var properties = Element(root, "properties") ?? root;
-        var sessionId = String(properties, "sessionID") ?? String(properties, "sessionId");
-        var messageId = String(properties, "messageID") ?? String(properties, "messageId");
-        var part = Element(properties, "part");
+        JsonElement root = source.VendorJson;
+        string type = String(root, "type") ?? source.Event ?? "unknown";
+        JsonElement properties = Element(root, "properties") ?? root;
+        string? sessionId = String(properties, "sessionID") ?? String(properties, "sessionId");
+        string? messageId = String(properties, "messageID") ?? String(properties, "messageId");
+        JsonElement? part = Element(properties, "part");
         sessionId ??= part is JsonElement p ? String(p, "sessionID") : null;
         messageId ??= part is JsonElement p2 ? String(p2, "messageID") : null;
-        var itemId = part is JsonElement p3 ? String(p3, "id") : null;
+        string? itemId = part is JsonElement p3 ? String(p3, "id") : null;
         var events = new List<KernelEvent>();
 
         switch (type)
@@ -44,13 +42,13 @@ public sealed class OpenCodeEventNormalizer
                 Add(KernelEventKind.TurnFailed, new TurnEventData(TurnStatus.Failed, Json(properties)));
                 break;
             case "session.status":
-                var status = Element(properties, "status");
-                var statusType = status is JsonElement st ? String(st, "type") : null;
+                JsonElement? status = Element(properties, "status");
+                string? statusType = status is JsonElement st ? String(st, "type") : null;
                 Add(statusType == "idle" ? KernelEventKind.TurnCompleted : KernelEventKind.TurnStarted,
                     new TurnEventData(statusType == "idle" ? TurnStatus.Completed : TurnStatus.Running, statusType));
                 break;
             case "message.part.delta":
-                var field = String(properties, "field");
+                string? field = String(properties, "field");
                 Add(KernelEventKind.ContentDelta,
                     new ContentDeltaEventData(field?.Contains("reason", StringComparison.OrdinalIgnoreCase) == true ? "reasoning" : "assistant",
                         String(properties, "delta") ?? string.Empty));
@@ -59,16 +57,16 @@ public sealed class OpenCodeEventNormalizer
                 if (part is JsonElement updated) AddPart(updated);
                 break;
             case "message.updated":
-                var info = Element(properties, "info") ?? properties;
-                var error = Element(info, "error");
+                JsonElement info = Element(properties, "info") ?? properties;
+                JsonElement? error = Element(info, "error");
                 if (error is not null) Add(KernelEventKind.TurnFailed, new TurnEventData(TurnStatus.Failed, Json(error.Value)));
                 AddUsage(info);
                 break;
             case "session.diff":
-                var diff = Element(properties, "diff") ?? Element(properties, "patch");
+                JsonElement? diff = Element(properties, "diff") ?? Element(properties, "patch");
                 Add(KernelEventKind.ItemCompleted, new ItemEventData(new KernelItem(
                     itemId ?? "diff_" + Guid.NewGuid().ToString("N"), KernelItemKind.Diff, KernelItemStatus.Completed,
-                    "Workspace diff", new ContentBlock[] { new DiffContentBlock(diff is null ? Json(properties) : Json(diff.Value), Array.Empty<string>()) },
+                    "Workspace diff", [new DiffContentBlock(diff is null ? Json(properties) : Json(diff.Value), [])],
                     DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, VendorData: root.Clone())));
                 break;
             case "permission.asked":
@@ -80,7 +78,7 @@ public sealed class OpenCodeEventNormalizer
                 AddQuestion(properties);
                 break;
             case "file.edited":
-                var path = String(properties, "file") ?? String(properties, "path") ?? "unknown";
+                string path = String(properties, "file") ?? String(properties, "path") ?? "unknown";
                 Add(KernelEventKind.ItemCompleted, new ItemEventData(Item(itemId, KernelItemKind.FileChange,
                     new FileChangeContentBlock(path, "edited"), root)));
                 break;
@@ -98,10 +96,10 @@ public sealed class OpenCodeEventNormalizer
 
         void AddPart(JsonElement value)
         {
-            var partType = String(value, "type") ?? "unknown";
-            var state = Element(value, "state");
-            var stateType = state is JsonElement stateValue ? String(stateValue, "status") : null;
-            var status = stateType switch { "pending" => KernelItemStatus.Pending, "running" => KernelItemStatus.Running, "error" => KernelItemStatus.Failed, _ => KernelItemStatus.Completed };
+            string partType = String(value, "type") ?? "unknown";
+            JsonElement? state = Element(value, "state");
+            string? stateType = state is JsonElement stateValue ? String(stateValue, "status") : null;
+            KernelItemStatus status = stateType switch { "pending" => KernelItemStatus.Pending, "running" => KernelItemStatus.Running, "error" => KernelItemStatus.Failed, _ => KernelItemStatus.Completed };
             ContentBlock content;
             KernelItemKind kind;
             switch (partType)
@@ -116,9 +114,9 @@ public sealed class OpenCodeEventNormalizer
                     break;
                 case "tool":
                     kind = stateType is "completed" or "error" ? KernelItemKind.ToolResult : KernelItemKind.ToolCall;
-                    var callId = String(value, "callID") ?? String(value, "id") ?? "unknown";
-                    var tool = String(value, "tool") ?? "unknown";
-                    var input = state is JsonElement s ? Element(s, "input") ?? default : default;
+                    string callId = String(value, "callID") ?? String(value, "id") ?? "unknown";
+                    string tool = String(value, "tool") ?? "unknown";
+                    JsonElement input = state is JsonElement s ? Element(s, "input") ?? default : default;
                     content = kind == KernelItemKind.ToolCall
                         ? new ToolCallContentBlock(callId, tool, input.ValueKind == JsonValueKind.Undefined ? JsonSerializer.SerializeToElement(new { }) : input.Clone(), String(state ?? value, "title"))
                         : new ToolResultContentBlock(callId, stateType != "error", state is JsonElement sr ? String(sr, "output") ?? Json(sr) : string.Empty);
@@ -129,7 +127,7 @@ public sealed class OpenCodeEventNormalizer
                     break;
                 case "patch":
                     kind = KernelItemKind.Diff;
-                    content = new DiffContentBlock(String(value, "hash") ?? Json(value), Array.Empty<string>());
+                    content = new DiffContentBlock(String(value, "hash") ?? Json(value), []);
                     break;
                 case "subtask":
                 case "agent":
@@ -145,7 +143,7 @@ public sealed class OpenCodeEventNormalizer
                     break;
             }
 
-            var eventKind = status switch
+            KernelEventKind eventKind = status switch
             {
                 KernelItemStatus.Pending or KernelItemStatus.Running => KernelEventKind.ItemStarted,
                 KernelItemStatus.Failed => KernelEventKind.ItemCompleted,
@@ -153,12 +151,12 @@ public sealed class OpenCodeEventNormalizer
             };
             Add(eventKind, new ItemEventData(new KernelItem(
                 String(value, "id") ?? "part_" + Guid.NewGuid().ToString("N"), kind, status, partType,
-                new[] { content }, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, VendorData: value.Clone())));
+                [content], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, VendorData: value.Clone())));
         }
 
         void AddUsage(JsonElement value)
         {
-            var tokens = Element(value, "tokens");
+            JsonElement? tokens = Element(value, "tokens");
             if (tokens is null) return;
             Add(KernelEventKind.UsageUpdated, new UsageEventData(
                 Long(tokens.Value, "input"), Long(tokens.Value, "output"), Long(tokens.Value, "cache"),
@@ -167,27 +165,26 @@ public sealed class OpenCodeEventNormalizer
 
         void AddPermission(JsonElement value)
         {
-            var id = String(value, "id") ?? String(value, "permissionID") ?? "unknown";
-            var sid = String(value, "sessionID") ?? sessionId ?? "unknown";
-            var permission = String(value, "permission") ?? String(value, "type") ?? "tool";
-            var patterns = Element(value, "patterns");
-            var impacts = patterns is { ValueKind: JsonValueKind.Array }
+            string id = String(value, "id") ?? String(value, "permissionID") ?? "unknown";
+            string sid = String(value, "sessionID") ?? sessionId ?? "unknown";
+            string permission = String(value, "permission") ?? String(value, "type") ?? "tool";
+            JsonElement? patterns = Element(value, "patterns");
+            ResourceImpact[] impacts = patterns is { ValueKind: JsonValueKind.Array }
                 ? patterns.Value.EnumerateArray().Select(x => new ResourceImpact(permission, x.ToString(), permission, "unknown")).ToArray()
-                : Array.Empty<ResourceImpact>();
+                : [];
             Add(KernelEventKind.PermissionRequested, new PermissionEventData(new PermissionRequest(
                 id, Session(sid), messageId, permission, $"OpenCode requests {permission}", String(value, "reason"), impacts,
-                new[]
-                {
+                [
                     new PermissionChoice("once", PermissionDecisionKind.AllowOnce, "Allow once", null),
                     new PermissionChoice("always", PermissionDecisionKind.AllowForSession, "Always allow", null),
                     new PermissionChoice("reject", PermissionDecisionKind.Deny, "Reject", null)
-                }, value.Clone())));
+                ], value.Clone())));
         }
 
         void AddQuestion(JsonElement value)
         {
-            var id = String(value, "id") ?? "unknown";
-            var sid = String(value, "sessionID") ?? sessionId ?? "unknown";
+            string id = String(value, "id") ?? "unknown";
+            string sid = String(value, "sessionID") ?? sessionId ?? "unknown";
             Add(KernelEventKind.ElicitationRequested, new ElicitationEventData(new ElicitationRequest(
                 id, Session(sid), "OpenCode question", String(value, "question") ?? Json(value),
                 Element(value, "schema")?.Clone(), value.Clone())));
@@ -196,11 +193,11 @@ public sealed class OpenCodeEventNormalizer
 
     public KernelSessionSummary ToSession(JsonElement value)
     {
-        var id = String(value, "id") ?? "unknown";
-        var time = Element(value, "time");
-        var created = time is JsonElement t ? Long(t, "created") : null;
-        var updated = time is JsonElement t2 ? Long(t2, "updated") : null;
-        var archived = time is JsonElement t3 ? Long(t3, "archived") : null;
+        string id = String(value, "id") ?? "unknown";
+        JsonElement? time = Element(value, "time");
+        long? created = time is JsonElement t ? Long(t, "created") : null;
+        long? updated = time is JsonElement t2 ? Long(t2, "updated") : null;
+        long? archived = time is JsonElement t3 ? Long(t3, "archived") : null;
         return new KernelSessionSummary(Session(id, String(value, "parentID"), String(value, "workspaceID")),
             String(value, "title") ?? id, archived is null ? SessionStatus.Idle : SessionStatus.Archived,
             FromUnix(created), FromUnix(updated), null,
@@ -212,19 +209,19 @@ public sealed class OpenCodeEventNormalizer
 
     private static KernelItem Item(string? id, KernelItemKind kind, ContentBlock content, JsonElement vendor)
         => new(id ?? "item_" + Guid.NewGuid().ToString("N"), kind, KernelItemStatus.Completed, null,
-            new[] { content }, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, VendorData: vendor.Clone());
+            [content], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, VendorData: vendor.Clone());
 
     internal static string? String(JsonElement value, string name)
-        => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+        => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
 
     internal static JsonElement? Element(JsonElement value, string name)
-        => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) ? property : null;
+        => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) ? property : null;
 
     private static long? Long(JsonElement value, string name)
-        => Element(value, name) is JsonElement item && item.TryGetInt64(out var number) ? number : null;
+        => Element(value, name) is JsonElement item && item.TryGetInt64(out long number) ? number : null;
 
     private static decimal? Decimal(JsonElement value, string name)
-        => Element(value, name) is JsonElement item && item.TryGetDecimal(out var number) ? number : null;
+        => Element(value, name) is JsonElement item && item.TryGetDecimal(out decimal number) ? number : null;
 
     internal static string Json(JsonElement value) => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();
 

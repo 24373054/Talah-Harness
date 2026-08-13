@@ -93,6 +93,8 @@ internal sealed class FakeCodexTransport : ICodexTransport
     private sealed class ChannelReaderTextReader : TextReader
     {
         private readonly ChannelReader<string> _reader;
+        private string? _current;
+        private int _position;
 
         public ChannelReaderTextReader(ChannelReader<string> reader)
         {
@@ -109,6 +111,30 @@ internal sealed class FakeCodexTransport : ICodexTransport
             {
                 return null;
             }
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<char> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (buffer.IsEmpty) return 0;
+            while (_current is null || _position >= _current.Length)
+            {
+                try
+                {
+                    _current = (await _reader.ReadAsync(cancellationToken)) + "\n";
+                    _position = 0;
+                }
+                catch (ChannelClosedException)
+                {
+                    return 0;
+                }
+            }
+
+            var count = Math.Min(buffer.Length, _current.Length - _position);
+            _current.AsMemory(_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
         }
     }
 }

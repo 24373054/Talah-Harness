@@ -23,7 +23,7 @@ public sealed partial class ProfilePathProvider
     {
         ValidateIdentifier(adapterId, nameof(adapterId));
         ValidateIdentifier(profileId, nameof(profileId));
-        var result = Path.GetFullPath(Path.Combine(_productRoot, "profiles", adapterId, profileId));
+        string result = Path.GetFullPath(Path.Combine(_productRoot, "profiles", adapterId, profileId));
         EnsureContained(result);
         if (create)
         {
@@ -36,8 +36,8 @@ public sealed partial class ProfilePathProvider
 
     public string GetCredentialRoot(string adapterId, string profileId, bool create = true)
     {
-        var profileRoot = GetProfileRoot(adapterId, profileId, create);
-        var result = Path.Combine(profileRoot, ".credentials");
+        string profileRoot = GetProfileRoot(adapterId, profileId, create);
+        string result = Path.Combine(profileRoot, ".credentials");
         if (create)
         {
             Directory.CreateDirectory(result);
@@ -55,7 +55,7 @@ public sealed partial class ProfilePathProvider
 
     private void EnsureContained(string path)
     {
-        var prefix = _productRoot + Path.DirectorySeparatorChar;
+        string prefix = _productRoot + Path.DirectorySeparatorChar;
         if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("The resolved profile path is outside the configured product root.");
     }
@@ -66,7 +66,7 @@ public sealed partial class ProfilePathProvider
         try
         {
             using var identity = WindowsIdentity.GetCurrent();
-            var user = identity.User;
+            SecurityIdentifier? user = identity.User;
             if (user is null) return;
             var security = new DirectorySecurity();
             security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
@@ -93,12 +93,10 @@ public sealed record ProfileMetadata(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-public sealed class ProfileMetadataStore
+public sealed class ProfileMetadataStore(ProfilePathProvider paths)
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private readonly ProfilePathProvider _paths;
-
-    public ProfileMetadataStore(ProfilePathProvider paths) => _paths = paths ?? throw new ArgumentNullException(nameof(paths));
+    private readonly ProfilePathProvider _paths = paths ?? throw new ArgumentNullException(nameof(paths));
 
     public async Task<ProfileMetadata> UpsertAsync(ProfileMetadata profile, CancellationToken cancellationToken = default)
     {
@@ -106,8 +104,8 @@ public sealed class ProfileMetadataStore
         ProfilePathProvider.ValidateIdentifier(profile.AdapterId, nameof(profile.AdapterId));
         ProfilePathProvider.ValidateIdentifier(profile.ProfileId, nameof(profile.ProfileId));
         if (string.IsNullOrWhiteSpace(profile.DisplayName)) throw new ArgumentException("A display name is required.", nameof(profile));
-        var root = _paths.GetProfileRoot(profile.AdapterId, profile.ProfileId);
-        var target = Path.Combine(root, "profile.json");
+        string root = _paths.GetProfileRoot(profile.AdapterId, profile.ProfileId);
+        string target = Path.Combine(root, "profile.json");
         await using var stream = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
         await JsonSerializer.SerializeAsync(stream, profile, SerializerOptions, cancellationToken).ConfigureAwait(false);
         return profile;
@@ -115,7 +113,7 @@ public sealed class ProfileMetadataStore
 
     public async Task<ProfileMetadata?> GetAsync(string adapterId, string profileId, CancellationToken cancellationToken = default)
     {
-        var target = Path.Combine(_paths.GetProfileRoot(adapterId, profileId, create: false), "profile.json");
+        string target = Path.Combine(_paths.GetProfileRoot(adapterId, profileId, create: false), "profile.json");
         if (!File.Exists(target)) return null;
         await using var stream = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
         return await JsonSerializer.DeserializeAsync<ProfileMetadata>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false)
@@ -125,16 +123,16 @@ public sealed class ProfileMetadataStore
     public async Task<IReadOnlyList<ProfileMetadata>> ListAsync(string adapterId, CancellationToken cancellationToken = default)
     {
         ProfilePathProvider.ValidateIdentifier(adapterId, nameof(adapterId));
-        var adapterRoot = Path.Combine(_paths.ProductRoot, "profiles", adapterId);
+        string adapterRoot = Path.Combine(_paths.ProductRoot, "profiles", adapterId);
         if (!Directory.Exists(adapterRoot)) return [];
         var result = new List<ProfileMetadata>();
-        foreach (var directory in Directory.EnumerateDirectories(adapterRoot, "*", SearchOption.TopDirectoryOnly).Order(StringComparer.OrdinalIgnoreCase))
+        foreach (string? directory in Directory.EnumerateDirectories(adapterRoot, "*", SearchOption.TopDirectoryOnly).Order(StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = Path.Combine(directory, "profile.json");
+            string path = Path.Combine(directory, "profile.json");
             if (!File.Exists(path)) continue;
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
-            var profile = await JsonSerializer.DeserializeAsync<ProfileMetadata>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
+            ProfileMetadata? profile = await JsonSerializer.DeserializeAsync<ProfileMetadata>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
             if (profile is not null) result.Add(profile);
         }
 
@@ -144,7 +142,7 @@ public sealed class ProfileMetadataStore
     public Task<bool> DeleteAsync(string adapterId, string profileId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var target = Path.Combine(_paths.GetProfileRoot(adapterId, profileId, create: false), "profile.json");
+        string target = Path.Combine(_paths.GetProfileRoot(adapterId, profileId, create: false), "profile.json");
         if (!File.Exists(target)) return Task.FromResult(false);
         File.Delete(target);
         return Task.FromResult(true);

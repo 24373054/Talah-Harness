@@ -2,18 +2,13 @@ using Talah.Harness.Contracts;
 
 namespace Talah.Harness.Adapters.Tlah;
 
-public sealed class TlahKernelAdapterFactory : IKernelAdapterFactory
+public sealed class TlahKernelAdapterFactory(Func<ITlahNativeRuntime> runtimeFactory) : IKernelAdapterFactory
 {
-    private readonly Func<ITlahNativeRuntime> _runtimeFactory;
+    private readonly Func<ITlahNativeRuntime> _runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
 
     public TlahKernelAdapterFactory()
         : this(static () => new TlahNativeRuntime())
     {
-    }
-
-    public TlahKernelAdapterFactory(Func<ITlahNativeRuntime> runtimeFactory)
-    {
-        _runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
     }
 
     public string AdapterId => TlahKernelAdapter.Id;

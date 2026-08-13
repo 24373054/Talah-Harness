@@ -18,7 +18,7 @@ public sealed class DpapiCredentialStore
     {
         ArgumentNullException.ThrowIfNull(secret);
         ProfilePathProvider.ValidateIdentifier(credentialId, nameof(credentialId));
-        var target = GetPath(adapterId, profileId, credentialId, create: true);
+        string target = GetPath(adapterId, profileId, credentialId, create: true);
         byte[] plaintext = Encoding.UTF8.GetBytes(secret);
         byte[] protectedBytes;
         try
@@ -32,7 +32,7 @@ public sealed class DpapiCredentialStore
 
         try
         {
-            var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
                 await File.WriteAllBytesAsync(temporary, protectedBytes, cancellationToken).ConfigureAwait(false);
@@ -52,9 +52,9 @@ public sealed class DpapiCredentialStore
     public async Task<string?> GetAsync(string adapterId, string profileId, string credentialId, CancellationToken cancellationToken = default)
     {
         ProfilePathProvider.ValidateIdentifier(credentialId, nameof(credentialId));
-        var target = GetPath(adapterId, profileId, credentialId, create: false);
+        string target = GetPath(adapterId, profileId, credentialId, create: false);
         if (!File.Exists(target)) return null;
-        var protectedBytes = await File.ReadAllBytesAsync(target, cancellationToken).ConfigureAwait(false);
+        byte[] protectedBytes = await File.ReadAllBytesAsync(target, cancellationToken).ConfigureAwait(false);
         byte[] plaintext;
         try
         {
@@ -77,7 +77,7 @@ public sealed class DpapiCredentialStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ProfilePathProvider.ValidateIdentifier(credentialId, nameof(credentialId));
-        var target = GetPath(adapterId, profileId, credentialId, create: false);
+        string target = GetPath(adapterId, profileId, credentialId, create: false);
         if (!File.Exists(target)) return Task.FromResult(false);
         File.Delete(target);
         return Task.FromResult(true);
@@ -95,14 +95,14 @@ public sealed class SecretRedactor
     public SecretRedactor(IEnumerable<string> secrets, string replacement = "[REDACTED]")
     {
         ArgumentNullException.ThrowIfNull(secrets);
-        _secrets = secrets.Where(static value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).OrderByDescending(static value => value.Length).ToArray();
+        _secrets = [.. secrets.Where(static value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).OrderByDescending(static value => value.Length)];
         _replacement = replacement;
     }
 
     public string Redact(string? value)
     {
         if (value is null) return string.Empty;
-        foreach (var secret in _secrets) value = value.Replace(secret, _replacement, StringComparison.Ordinal);
+        foreach (string secret in _secrets) value = value.Replace(secret, _replacement, StringComparison.Ordinal);
         return value;
     }
 }

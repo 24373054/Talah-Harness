@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Talah.Harness.Application</RootNamespace>
+    <Description>Durable multi-kernel host orchestration for Talah Harness.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Talah.Harness.Contracts/Talah.Harness.Contracts.csproj" />
+    <ProjectReference Include="../Talah.Harness.Persistence/Talah.Harness.Persistence.csproj" />
+    <ProjectReference Include="../Talah.Harness.Runtime/Talah.Harness.Runtime.csproj" />
+  </ItemGroup>
+</Project>

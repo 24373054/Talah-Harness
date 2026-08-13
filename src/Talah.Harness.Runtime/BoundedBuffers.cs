@@ -25,7 +25,7 @@ public sealed class BoundedTextRingBuffer
     {
         lock (_gate)
         {
-            foreach (var character in value)
+            foreach (char character in value)
             {
                 if (_length == _buffer.Length)
                 {
@@ -44,8 +44,8 @@ public sealed class BoundedTextRingBuffer
     {
         lock (_gate)
         {
-            var result = new char[_length];
-            for (var index = 0; index < _length; index++)
+            char[] result = new char[_length];
+            for (int index = 0; index < _length; index++)
             {
                 result[index] = _buffer[(_start + index) % _buffer.Length];
             }
@@ -67,12 +67,12 @@ public static class BoundedLineReader
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumLineLength, 1);
 
-        var buffer = new char[Math.Min(4096, maximumLineLength)];
+        char[] buffer = new char[Math.Min(4096, maximumLineLength)];
         var line = new StringBuilder(Math.Min(maximumLineLength, 4096));
         long dropped = 0;
         while (true)
         {
-            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            int read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 if (line.Length != 0 || dropped != 0)
@@ -83,9 +83,9 @@ public static class BoundedLineReader
                 yield break;
             }
 
-            for (var index = 0; index < read; index++)
+            for (int index = 0; index < read; index++)
             {
-                var character = buffer[index];
+                char character = buffer[index];
                 if (character == '\n')
                 {
                     if (line.Length > 0 && line[^1] == '\r')

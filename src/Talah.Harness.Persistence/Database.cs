@@ -1,5 +1,5 @@
-using Microsoft.Data.Sqlite;
 using System.Collections.Concurrent;
+using Microsoft.Data.Sqlite;
 
 namespace Talah.Harness.Persistence;
 
@@ -10,17 +10,10 @@ public sealed record HarnessDatabaseOptions(
 
 public sealed record DatabaseInitializationResult(int SchemaVersion, string? BackupPath, string IntegrityResult);
 
-public sealed class HarnessMigrationException : Exception
+public sealed class HarnessMigrationException(string message, int sourceVersion, int targetVersion, Exception innerException) : Exception(message, innerException)
 {
-    public HarnessMigrationException(string message, int sourceVersion, int targetVersion, Exception innerException)
-        : base(message, innerException)
-    {
-        SourceVersion = sourceVersion;
-        TargetVersion = targetVersion;
-    }
-
-    public int SourceVersion { get; }
-    public int TargetVersion { get; }
+    public int SourceVersion { get; } = sourceVersion;
+    public int TargetVersion { get; } = targetVersion;
 }
 
 public sealed class HarnessDatabase
@@ -35,7 +28,7 @@ public sealed class HarnessDatabase
         ArgumentNullException.ThrowIfNull(options);
         if (!Path.IsPathFullyQualified(options.DatabasePath)) throw new ArgumentException("The database path must be absolute.", nameof(options));
         Options = options with { DatabasePath = Path.GetFullPath(options.DatabasePath) };
-        var timeout = options.BusyTimeout ?? TimeSpan.FromSeconds(10);
+        TimeSpan timeout = options.BusyTimeout ?? TimeSpan.FromSeconds(10);
         if (timeout <= TimeSpan.Zero || timeout.TotalMilliseconds > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(options), "Busy timeout must be positive and fit in milliseconds.");
         _busyTimeoutMilliseconds = (int)timeout.TotalMilliseconds;
         _connectionString = new SqliteConnectionStringBuilder
@@ -52,16 +45,16 @@ public sealed class HarnessDatabase
 
     public async Task<DatabaseInitializationResult> InitializeAsync(CancellationToken cancellationToken = default)
     {
-        var migrationLock = MigrationLocks.GetOrAdd(Options.DatabasePath, static _ => new SemaphoreSlim(1, 1));
+        SemaphoreSlim migrationLock = MigrationLocks.GetOrAdd(Options.DatabasePath, static _ => new SemaphoreSlim(1, 1));
         await migrationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var directory = Path.GetDirectoryName(Options.DatabasePath)!;
+            string directory = Path.GetDirectoryName(Options.DatabasePath)!;
             Directory.CreateDirectory(directory);
-            var existed = File.Exists(Options.DatabasePath) && new FileInfo(Options.DatabasePath).Length > 0;
+            bool existed = File.Exists(Options.DatabasePath) && new FileInfo(Options.DatabasePath).Length > 0;
             int version;
             string integrity;
-            await using (var inspection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+            await using (SqliteConnection inspection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
             {
                 version = await ScalarIntAsync(inspection, "PRAGMA user_version;", cancellationToken).ConfigureAwait(false);
                 integrity = await ScalarStringAsync(inspection, "PRAGMA integrity_check;", cancellationToken).ConfigureAwait(false);
@@ -85,8 +78,8 @@ public sealed class HarnessDatabase
                 }
                 try
                 {
-                    await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-                    await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+                    await using SqliteConnection connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+                    await using System.Data.Common.DbTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
                     await ExecuteAsync(connection, transaction, SchemaV1, cancellationToken).ConfigureAwait(false);
                     await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -98,9 +91,9 @@ public sealed class HarnessDatabase
                 }
             }
 
-            await using var validation = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            var finalVersion = await ScalarIntAsync(validation, "PRAGMA user_version;", cancellationToken).ConfigureAwait(false);
-            var finalIntegrity = await ScalarStringAsync(validation, "PRAGMA integrity_check;", cancellationToken).ConfigureAwait(false);
+            await using SqliteConnection validation = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            int finalVersion = await ScalarIntAsync(validation, "PRAGMA user_version;", cancellationToken).ConfigureAwait(false);
+            string finalIntegrity = await ScalarStringAsync(validation, "PRAGMA integrity_check;", cancellationToken).ConfigureAwait(false);
             if (finalVersion != CurrentSchemaVersion || !string.Equals(finalIntegrity, "ok", StringComparison.OrdinalIgnoreCase))
                 throw new HarnessMigrationException("Database validation failed after migration.", version, CurrentSchemaVersion, new InvalidDataException(finalIntegrity));
             return new DatabaseInitializationResult(finalVersion, backup, finalIntegrity);
@@ -117,7 +110,7 @@ public sealed class HarnessDatabase
         try
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
+            await using SqliteCommand command = connection.CreateCommand();
             command.CommandText = $"PRAGMA foreign_keys=ON; PRAGMA busy_timeout={_busyTimeoutMilliseconds}; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;";
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return connection;
@@ -131,12 +124,12 @@ public sealed class HarnessDatabase
 
     private string CreateBackup(CancellationToken cancellationToken)
     {
-        var directory = Options.BackupDirectory is null
+        string directory = Options.BackupDirectory is null
             ? Path.Combine(Path.GetDirectoryName(Options.DatabasePath)!, "backups")
             : Path.GetFullPath(Options.BackupDirectory);
         Directory.CreateDirectory(directory);
-        var baseName = Path.GetFileName(Options.DatabasePath);
-        var path = Path.Combine(directory, $"{baseName}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.v0.bak");
+        string baseName = Path.GetFileName(Options.DatabasePath);
+        string path = Path.Combine(directory, $"{baseName}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.v0.bak");
         cancellationToken.ThrowIfCancellationRequested();
         using var source = new SqliteConnection(_connectionString);
         using var destination = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -154,21 +147,21 @@ public sealed class HarnessDatabase
 
     private static async Task<int> ScalarIntAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
+        await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static async Task<string> ScalarStringAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
+        await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToString(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
     private static async Task ExecuteAsync(SqliteConnection connection, System.Data.Common.DbTransaction transaction, string sql, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
+        await using SqliteCommand command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -190,6 +183,15 @@ public sealed class HarnessDatabase
             metadata_json TEXT,
             updated_at TEXT NOT NULL,
             PRIMARY KEY(adapter_id, profile_id)
+        ) STRICT;
+
+        CREATE TABLE workspaces (
+            workspace_id TEXT PRIMARY KEY,
+            root_path TEXT NOT NULL,
+            additional_roots_json TEXT NOT NULL,
+            is_trusted INTEGER NOT NULL CHECK(is_trusted IN (0,1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         ) STRICT;
 
         CREATE TABLE sessions (
@@ -275,6 +277,7 @@ public sealed class HarnessDatabase
             created_at TEXT NOT NULL,
             resolved_at TEXT
         ) STRICT;
+        CREATE INDEX ix_approvals_pending ON approvals(status, created_at);
 
         PRAGMA user_version=1;
         """;

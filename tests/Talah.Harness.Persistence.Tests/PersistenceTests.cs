@@ -141,6 +141,65 @@ public sealed class PersistenceTests
     }
 
     [Fact]
+    public async Task WorkspaceAndSessionBindingRoundTripWithoutBeingClearedByAdapterRefresh()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = CreateDatabase(temp);
+        await database.InitializeAsync();
+        var repository = new CanonicalRepository(database);
+        var workspace = new WorkspaceDescriptor("ws_1", @"C:\work", [@"D:\shared"], true);
+        await repository.UpsertWorkspaceAsync(workspace);
+        var now = DateTimeOffset.UtcNow;
+        var bound = Session("bound", now) with { Session = Session("bound", now).Session with { WorkspaceId = workspace.WorkspaceId } };
+        await repository.UpsertSessionAsync(bound);
+        await repository.UpsertSessionAsync(Session("bound", now.AddMinutes(1)));
+
+        var storedWorkspace = (await repository.GetWorkspaceAsync(workspace.WorkspaceId))!.Workspace;
+        Assert.Equal(workspace.WorkspaceId, storedWorkspace.WorkspaceId);
+        Assert.Equal(workspace.RootPath, storedWorkspace.RootPath);
+        Assert.Equal(workspace.AdditionalRoots, storedWorkspace.AdditionalRoots);
+        Assert.Equal(workspace.IsTrusted, storedWorkspace.IsTrusted);
+        Assert.Equal(workspace.WorkspaceId, (await repository.GetSessionAsync(bound.Session))!.Summary.Session.WorkspaceId);
+    }
+
+    [Fact]
+    public async Task ResolvedApprovalCannotBeReopenedByEventProjectionReplay()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = CreateDatabase(temp);
+        await database.InitializeAsync();
+        var repository = new CanonicalRepository(database);
+        var now = DateTimeOffset.UtcNow;
+        var request = JsonSerializer.SerializeToElement(new { tool = "shell" });
+        var response = JsonSerializer.SerializeToElement(new { choice = "deny" });
+        var pending = new StoredApproval("approval", "codex", "default", "session", "turn", "pending", request, null, now, null);
+        await repository.UpsertApprovalAsync(pending);
+        await repository.UpsertApprovalAsync(pending with { Status = "resolved", Response = response, ResolvedAt = now.AddSeconds(1) });
+        await repository.UpsertApprovalAsync(pending); // Replay the original request event.
+
+        var stored = await repository.GetApprovalAsync("approval");
+        Assert.Equal("resolved", stored!.Status);
+        Assert.Equal("deny", stored.Response!.Value.GetProperty("choice").GetString());
+        Assert.Empty(await repository.ListPendingApprovalsAsync());
+    }
+
+    [Fact]
+    public async Task EventsAfterSequenceSupportDurableCatchUp()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = CreateDatabase(temp);
+        await database.InitializeAsync();
+        var repository = new CanonicalRepository(database);
+        var first = await repository.AppendEventAsync("first", Event(1));
+        var second = await repository.AppendEventAsync("second", Event(2));
+
+        var catchUp = await repository.GetEventsAfterAsync(first.HostSequence);
+        var stored = Assert.Single(catchUp);
+        Assert.Equal(second.HostSequence, stored.HostSequence);
+        Assert.Equal("second", stored.NativeEventId);
+    }
+
+    [Fact]
     public async Task NewerSchema_FailsWithActionableVersionInformation()
     {
         using var temp = new TemporaryDirectory();

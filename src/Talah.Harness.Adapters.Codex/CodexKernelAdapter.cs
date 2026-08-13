@@ -6,13 +6,18 @@ using Talah.Harness.Contracts;
 
 namespace Talah.Harness.Adapters.Codex;
 
-public sealed class CodexKernelAdapter : IKernelAdapter
+public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
 {
     public const string CodexAdapterId = "codex";
     private readonly KernelProfile _profile;
     private readonly CodexAppServerClient _client;
-    private readonly Channel<KernelEvent> _events = Channel.CreateUnbounded<KernelEvent>(
-        new UnboundedChannelOptions { SingleWriter = false, SingleReader = false });
+    private readonly Channel<KernelEvent> _events = Channel.CreateBounded<KernelEvent>(
+        new BoundedChannelOptions(4_096)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleWriter = false,
+            SingleReader = false
+        });
     private readonly ConcurrentDictionary<string, PendingInteraction> _interactions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _diffs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
@@ -60,7 +65,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         new SecurityDescriptor(
             SecurityEnforcementKind.OperatingSystemSandbox,
             "Codex App Server",
-            Array.Empty<string>(),
+            [],
             NetworkRestricted: false,
             ProcessRestricted: false,
             IsVerifiedByHost: false,
@@ -87,7 +92,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
         try
         {
-            var result = await _client.InitializeAsync(context.HostVersion, cancellationToken).ConfigureAwait(false);
+            JsonElement result = await _client.InitializeAsync(context.HostVersion, cancellationToken).ConfigureAwait(false);
             _nativeVersion = GetString(result, "userAgent") ?? "codex-cli 0.147.0";
             _availability = KernelAvailability.Ready;
             Emit(null, null, null, KernelEventKind.AdapterStatusChanged,
@@ -104,9 +109,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     public Task<KernelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var diagnostics = _availability == KernelAvailability.Ready
+        KernelDiagnostic[] diagnostics = _availability == KernelAvailability.Ready
             ? Array.Empty<KernelDiagnostic>()
-            : new[] { new KernelDiagnostic("CODEX_NOT_READY", DiagnosticSeverity.Warning, "Codex App Server is not ready.") };
+            : [new KernelDiagnostic("CODEX_NOT_READY", DiagnosticSeverity.Warning, "Codex App Server is not ready.")];
         return Task.FromResult(new KernelHealth(
             _availability,
             _availability == KernelAvailability.Ready ? "Codex App Server is ready." : "Codex App Server is unavailable.",
@@ -117,9 +122,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     public async Task<AuthenticationState> GetAuthenticationStateAsync(CancellationToken cancellationToken = default)
     {
         EnsureReady();
-        var result = await _client.RequestAsync("account/read", new { refreshToken = false }, cancellationToken)
+        JsonElement result = await _client.RequestAsync("account/read", new { refreshToken = false }, cancellationToken)
             .ConfigureAwait(false);
-        if (!result.TryGetProperty("account", out var account) || account.ValueKind == JsonValueKind.Null)
+        if (!result.TryGetProperty("account", out JsonElement account) || account.ValueKind == JsonValueKind.Null)
         {
             return new AuthenticationState(
                 AuthenticationStatus.SignedOut,
@@ -129,8 +134,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 GetBoolean(result, "requiresOpenaiAuth") == true ? "OpenAI authentication is required." : null);
         }
 
-        var type = GetString(account, "type");
-        var label = type == "chatgpt" ? GetString(account, "email") : type;
+        string? type = GetString(account, "type");
+        string? label = type == "chatgpt" ? GetString(account, "email") : type;
         return new AuthenticationState(
             AuthenticationStatus.SignedIn,
             label,
@@ -154,12 +159,12 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 "Use ConfigureApiKeyAsync so the secret can be handled as a credential."),
             _ => throw new NotSupportedException($"Codex schema 0.147.0 does not expose login method '{request.Method}'.")
         };
-        var result = await _client.RequestAsync("account/login/start", parameters, cancellationToken)
+        JsonElement result = await _client.RequestAsync("account/login/start", parameters, cancellationToken)
             .ConfigureAwait(false);
-        var type = GetString(result, "type");
-        var loginId = GetString(result, "loginId") ?? throw new CodexProtocolException("Login response has no loginId.");
-        var uriText = type == "chatgpt" ? GetString(result, "authUrl") : GetString(result, "verificationUrl");
-        var uri = Uri.TryCreate(uriText, UriKind.Absolute, out var parsedUri) ? parsedUri : null;
+        string? type = GetString(result, "type");
+        string loginId = GetString(result, "loginId") ?? throw new CodexProtocolException("Login response has no loginId.");
+        string? uriText = type == "chatgpt" ? GetString(result, "authUrl") : GetString(result, "verificationUrl");
+        Uri? uri = Uri.TryCreate(uriText, UriKind.Absolute, out Uri? parsedUri) ? parsedUri : null;
         return new LoginChallenge(
             loginId,
             request.Method,
@@ -214,13 +219,13 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         string? cursor = null;
         do
         {
-            var result = await _client.RequestAsync(
+            JsonElement result = await _client.RequestAsync(
                 "model/list",
                 new { cursor, includeHidden = false, limit = 100 },
                 cancellationToken).ConfigureAwait(false);
-            if (result.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            if (result.TryGetProperty("data", out JsonElement data) && data.ValueKind == JsonValueKind.Array)
             {
-                foreach (var model in data.EnumerateArray())
+                foreach (JsonElement model in data.EnumerateArray())
                 {
                     models.Add(new KernelModel(
                         GetString(model, "id") ?? GetString(model, "model") ?? "unknown",
@@ -248,12 +253,12 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     {
         EnsureReady();
         ValidatePage(request);
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "thread/list",
             new { cursor = request.Cursor, limit = request.PageSize, archived = false, sortKey = "updated_at", sortDirection = "desc" },
             cancellationToken).ConfigureAwait(false);
-        var items = GetArray(result, "data").Select(thread => MapSession(thread)).ToArray();
-        var next = GetString(result, "nextCursor");
+        KernelSessionSummary[] items = GetArray(result, "data").Select(thread => MapSession(thread)).ToArray();
+        string? next = GetString(result, "nextCursor");
         return new ResultPage<KernelSessionSummary>(items, next, next is not null);
     }
 
@@ -262,7 +267,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         CancellationToken cancellationToken = default)
     {
         EnsureReady();
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "thread/start",
             new
             {
@@ -272,8 +277,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 experimentalRawEvents = false
             },
             cancellationToken).ConfigureAwait(false);
-        var thread = RequiredProperty(result, "thread");
-        var summary = MapSession(thread, request.Title);
+        JsonElement thread = RequiredProperty(result, "thread");
+        KernelSessionSummary summary = MapSession(thread, request.Title);
         if (!string.IsNullOrWhiteSpace(request.Title))
         {
             await _client.RequestAsync("thread/name/set", new { threadId = summary.Session.NativeSessionId, name = request.Title }, cancellationToken)
@@ -289,7 +294,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         CancellationToken cancellationToken = default)
     {
         ValidateSession(session);
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "thread/resume",
             new { threadId = session.NativeSessionId },
             cancellationToken).ConfigureAwait(false);
@@ -301,11 +306,11 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         CancellationToken cancellationToken = default)
     {
         ValidateSession(request.Session);
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "thread/fork",
             new { threadId = request.Session.NativeSessionId, lastTurnId = request.NativeItemId },
             cancellationToken).ConfigureAwait(false);
-        var summary = MapSession(RequiredProperty(result, "thread"), request.Title);
+        KernelSessionSummary summary = MapSession(RequiredProperty(result, "thread"), request.Title);
         if (!string.IsNullOrWhiteSpace(request.Title))
         {
             await _client.RequestAsync("thread/name/set", new { threadId = summary.Session.NativeSessionId, name = request.Title }, cancellationToken)
@@ -323,6 +328,21 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             .ConfigureAwait(false);
     }
 
+    public async Task<KernelSessionSummary> RenameSessionAsync(
+        SessionRef session,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSession(session);
+        if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("A session title is required.", nameof(title));
+        await _client.RequestAsync(
+                "thread/name/set",
+                new { threadId = session.NativeSessionId, name = title.Trim() },
+                cancellationToken)
+            .ConfigureAwait(false);
+        return await ResumeSessionAsync(session, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<KernelTurn> StartTurnAsync(
         SessionRef session,
         TurnInput input,
@@ -330,7 +350,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         CancellationToken cancellationToken = default)
     {
         ValidateSession(session);
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "turn/start",
             new
             {
@@ -341,7 +361,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 sandboxPolicy = MapSandbox(options.SandboxMode)
             },
             cancellationToken).ConfigureAwait(false);
-        var turn = RequiredProperty(result, "turn");
+        JsonElement turn = RequiredProperty(result, "turn");
         return MapTurn(session, turn);
     }
 
@@ -373,7 +393,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     public async Task RespondToPermissionAsync(PermissionResponse response, CancellationToken cancellationToken = default)
     {
         EnsureReady();
-        if (!_interactions.TryRemove(response.PermissionId, out var pending) || pending.Kind != InteractionKind.Permission)
+        if (!_interactions.TryRemove(response.PermissionId, out PendingInteraction? pending) || pending.Kind != InteractionKind.Permission)
         {
             throw new KeyNotFoundException($"No pending Codex permission '{response.PermissionId}'.");
         }
@@ -386,13 +406,13 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
         if (pending.NativeKind == "permissions")
         {
-            var requestedPermissions = pending.Parameters.TryGetProperty("permissions", out var permissions)
+            JsonElement requestedPermissions = pending.Parameters.TryGetProperty("permissions", out JsonElement permissions)
                 ? permissions.Clone()
                 : JsonSerializer.SerializeToElement(new { });
-            var grantedPermissions = response.ChoiceId == "deny"
+            JsonElement grantedPermissions = response.ChoiceId == "deny"
                 ? JsonSerializer.SerializeToElement(new { })
                 : requestedPermissions;
-            var scope = response.ChoiceId switch
+            string scope = response.ChoiceId switch
             {
                 "allow-once" => "turn",
                 "allow-session" => "session",
@@ -406,7 +426,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             return;
         }
 
-        var decision = response.ChoiceId switch
+        string decision = response.ChoiceId switch
         {
             "allow-once" => "accept",
             "allow-session" => "acceptForSession",
@@ -419,7 +439,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     public async Task RespondToElicitationAsync(ElicitationResponse response, CancellationToken cancellationToken = default)
     {
         EnsureReady();
-        if (!_interactions.TryRemove(response.RequestId, out var pending) || pending.Kind == InteractionKind.Permission)
+        if (!_interactions.TryRemove(response.RequestId, out PendingInteraction? pending) || pending.Kind == InteractionKind.Permission)
         {
             throw new KeyNotFoundException($"No pending Codex elicitation '{response.RequestId}'.");
         }
@@ -433,7 +453,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             }
             else
             {
-                var answers = response.Value is { ValueKind: JsonValueKind.Object }
+                Dictionary<string, object> answers = response.Value is { ValueKind: JsonValueKind.Object }
                     ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(response.Value.Value.GetRawText())!
                         .ToDictionary(pair => pair.Key, pair => (object)new { answers = ToStringArray(pair.Value) })
                     : throw new ArgumentException("Tool input response must be an object keyed by question id.", nameof(response));
@@ -457,12 +477,12 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     {
         ValidateSession(session);
         ValidatePage(request);
-        var result = await _client.RequestAsync(
+        JsonElement result = await _client.RequestAsync(
             "thread/items/list",
             new { threadId = session.NativeSessionId, cursor = request.Cursor, limit = request.PageSize, sortDirection = "asc" },
             cancellationToken).ConfigureAwait(false);
-        var items = GetArray(result, "data").Select(item => MapItem(item, null)).ToArray();
-        var next = GetString(result, "nextCursor");
+        KernelItem[] items = GetArray(result, "data").Select(item => MapItem(item, null)).ToArray();
+        string? next = GetString(result, "nextCursor");
         return new ResultPage<KernelItem>(items, next, next is not null);
     }
 
@@ -472,15 +492,15 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         CancellationToken cancellationToken = default)
     {
         ValidateSession(session);
-        var key = DiffKey(session.NativeSessionId, nativeTurnOrItemId);
-        if (!_diffs.TryGetValue(key, out var diff) && nativeTurnOrItemId is not null)
+        string key = DiffKey(session.NativeSessionId, nativeTurnOrItemId);
+        if (!_diffs.TryGetValue(key, out string? diff) && nativeTurnOrItemId is not null)
         {
             _diffs.TryGetValue(DiffKey(session.NativeSessionId, null), out diff);
         }
 
         if (diff is null)
         {
-            var result = await _client.RequestAsync(
+            JsonElement result = await _client.RequestAsync(
                 "thread/read",
                 new { threadId = session.NativeSessionId, includeTurns = true },
                 cancellationToken)
@@ -499,7 +519,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        await foreach (var item in _events.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
+        await foreach (KernelEvent? item in _events.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
         {
             yield return item;
         }
@@ -507,9 +527,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private Task OnNotificationAsync(string method, JsonElement parameters, JsonElement vendorData)
     {
-        var threadId = GetString(parameters, "threadId");
-        var turnId = GetString(parameters, "turnId");
-        var itemId = GetString(parameters, "itemId");
+        string? threadId = GetString(parameters, "threadId");
+        string? turnId = GetString(parameters, "turnId");
+        string? itemId = GetString(parameters, "itemId");
         switch (method)
         {
             case "account/updated":
@@ -518,9 +538,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                     new StatusEventData(KernelAvailability.Ready, method == "account/updated" ? "Codex account changed." : "Codex login completed."), vendorData);
                 break;
             case "thread/started":
-                if (parameters.TryGetProperty("thread", out var startedThread))
+                if (parameters.TryGetProperty("thread", out JsonElement startedThread))
                 {
-                    var summary = MapSession(startedThread);
+                    KernelSessionSummary summary = MapSession(startedThread);
                     Emit(summary.Session.NativeSessionId, null, null, KernelEventKind.SessionCreated, new SessionEventData(summary), vendorData);
                 }
 
@@ -537,7 +557,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                     new StatusEventData(KernelAvailability.Ready, method), vendorData);
                 break;
             case "turn/started":
-                if (parameters.TryGetProperty("turn", out var startedTurn))
+                if (parameters.TryGetProperty("turn", out JsonElement startedTurn))
                 {
                     turnId = GetString(startedTurn, "id") ?? turnId;
                 }
@@ -546,9 +566,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                     new TurnEventData(TurnStatus.Running), vendorData);
                 break;
             case "turn/completed":
-                var completedTurn = parameters.TryGetProperty("turn", out var turn) ? turn : default;
+                JsonElement completedTurn = parameters.TryGetProperty("turn", out JsonElement turn) ? turn : default;
                 turnId = completedTurn.ValueKind == JsonValueKind.Object ? GetString(completedTurn, "id") ?? turnId : turnId;
-                var status = completedTurn.ValueKind == JsonValueKind.Object ? MapTurnStatus(GetString(completedTurn, "status")) : TurnStatus.Completed;
+                TurnStatus status = completedTurn.ValueKind == JsonValueKind.Object ? MapTurnStatus(GetString(completedTurn, "status")) : TurnStatus.Completed;
                 Emit(threadId, turnId, null, status switch
                 {
                     TurnStatus.Cancelled => KernelEventKind.TurnCancelled,
@@ -557,7 +577,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 }, new TurnEventData(status), vendorData);
                 break;
             case "turn/diff/updated":
-                var diff = GetString(parameters, "diff") ?? string.Empty;
+                string diff = GetString(parameters, "diff") ?? string.Empty;
                 if (threadId is not null)
                 {
                     _diffs[DiffKey(threadId, turnId)] = diff;
@@ -569,7 +589,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 break;
             case "item/started":
             case "item/completed":
-                if (parameters.TryGetProperty("item", out var item))
+                if (parameters.TryGetProperty("item", out JsonElement item))
                 {
                     itemId = GetString(item, "id") ?? itemId;
                     Emit(threadId, turnId, itemId,
@@ -598,8 +618,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 EmitDelta(threadId, turnId, itemId, "file", GetString(parameters, "delta"), vendorData);
                 break;
             case "item/fileChange/patchUpdated":
-                var patchChanges = GetArray(parameters, "changes").ToArray();
-                var patchDiff = string.Join("\n", patchChanges.Select(change => GetString(change, "diff") ?? string.Empty));
+                JsonElement[] patchChanges = GetArray(parameters, "changes").ToArray();
+                string patchDiff = string.Join("\n", patchChanges.Select(change => GetString(change, "diff") ?? string.Empty));
                 if (threadId is not null)
                 {
                     _diffs[DiffKey(threadId, turnId)] = patchDiff;
@@ -610,7 +630,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                     new ItemEventData(MapDiffItem(itemId ?? turnId ?? "diff", patchDiff, vendorData)), vendorData);
                 break;
             case "thread/tokenUsage/updated":
-                var usage = parameters.TryGetProperty("tokenUsage", out var tokenUsage) ? tokenUsage : parameters;
+                JsonElement usage = parameters.TryGetProperty("tokenUsage", out JsonElement tokenUsage) ? tokenUsage : parameters;
                 Emit(threadId, turnId, null, KernelEventKind.UsageUpdated,
                     new UsageEventData(
                         GetInt64(usage, "inputTokens") ?? GetNestedInt64(usage, "total", "inputTokens"),
@@ -624,8 +644,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             case "guardianWarning":
             case "deprecationNotice":
             case "configWarning":
-                var message = GetString(parameters, "message")
-                    ?? (parameters.TryGetProperty("error", out var error) ? GetString(error, "message") : null)
+                string message = GetString(parameters, "message")
+                    ?? (parameters.TryGetProperty("error", out JsonElement error) ? GetString(error, "message") : null)
                     ?? method;
                 EmitDiagnostic("CODEX_" + method.Replace('/', '_').ToUpperInvariant(),
                     method == "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
@@ -655,11 +675,11 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private Task RegisterPermissionAsync(CodexServerRequest request, string nativeKind)
     {
-        var id = InteractionId(request.Id, nativeKind);
-        var parameters = request.Parameters;
-        var threadId = GetString(parameters, "threadId") ?? string.Empty;
-        var turnId = GetString(parameters, "turnId");
-        var itemId = GetString(parameters, "itemId");
+        string id = InteractionId(request.Id, nativeKind);
+        JsonElement parameters = request.Parameters;
+        string threadId = GetString(parameters, "threadId") ?? string.Empty;
+        string? turnId = GetString(parameters, "turnId");
+        string? itemId = GetString(parameters, "itemId");
         var impacts = new List<ResourceImpact>();
         if (nativeKind == "command")
         {
@@ -670,7 +690,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 "high",
                 GetString(parameters, "reason")));
         }
-        else if (parameters.TryGetProperty("grantRoot", out var grantRoot) && grantRoot.ValueKind == JsonValueKind.String)
+        else if (parameters.TryGetProperty("grantRoot", out JsonElement grantRoot) && grantRoot.ValueKind == JsonValueKind.String)
         {
             impacts.Add(new ResourceImpact("filesystem", grantRoot.GetString()!, "write", "high", GetString(parameters, "reason")));
         }
@@ -697,12 +717,12 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private Task RegisterToolInputAsync(CodexServerRequest request)
     {
-        var id = InteractionId(request.Id, "tool-input");
-        var parameters = request.Parameters;
-        var threadId = GetString(parameters, "threadId") ?? string.Empty;
-        var questions = GetArray(parameters, "questions").ToArray();
-        var prompt = string.Join("\n\n", questions.Select(q => GetString(q, "question") ?? string.Empty));
-        var schema = JsonSerializer.SerializeToElement(new
+        string id = InteractionId(request.Id, "tool-input");
+        JsonElement parameters = request.Parameters;
+        string threadId = GetString(parameters, "threadId") ?? string.Empty;
+        JsonElement[] questions = GetArray(parameters, "questions").ToArray();
+        string prompt = string.Join("\n\n", questions.Select(q => GetString(q, "question") ?? string.Empty));
+        JsonElement schema = JsonSerializer.SerializeToElement(new
         {
             type = "object",
             properties = questions.ToDictionary(
@@ -730,10 +750,10 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private Task RegisterMcpElicitationAsync(CodexServerRequest request)
     {
-        var id = InteractionId(request.Id, "mcp-elicitation");
-        var parameters = request.Parameters;
-        var threadId = GetString(parameters, "threadId") ?? string.Empty;
-        var schema = parameters.TryGetProperty("requestedSchema", out var requestedSchema)
+        string id = InteractionId(request.Id, "mcp-elicitation");
+        JsonElement parameters = request.Parameters;
+        string threadId = GetString(parameters, "threadId") ?? string.Empty;
+        JsonElement? schema = parameters.TryGetProperty("requestedSchema", out JsonElement requestedSchema)
             ? requestedSchema.Clone()
             : (JsonElement?)null;
         var elicitation = new ElicitationRequest(
@@ -751,10 +771,10 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private KernelSessionSummary MapSession(JsonElement thread, string? requestedTitle = null)
     {
-        var id = GetString(thread, "id") ?? throw new CodexProtocolException("Thread has no id.");
-        var created = FromUnixSeconds(GetInt64(thread, "createdAt")) ?? DateTimeOffset.UtcNow;
-        var updated = FromUnixSeconds(GetInt64(thread, "updatedAt")) ?? created;
-        var title = requestedTitle ?? GetString(thread, "name") ?? GetString(thread, "preview") ?? "Codex thread";
+        string id = GetString(thread, "id") ?? throw new CodexProtocolException("Thread has no id.");
+        DateTimeOffset created = FromUnixSeconds(GetInt64(thread, "createdAt")) ?? DateTimeOffset.UtcNow;
+        DateTimeOffset updated = FromUnixSeconds(GetInt64(thread, "updatedAt")) ?? created;
+        string title = requestedTitle ?? GetString(thread, "name") ?? GetString(thread, "preview") ?? "Codex thread";
         return new KernelSessionSummary(
             Session(id, GetString(thread, "forkedFromId") ?? GetString(thread, "parentThreadId")),
             title,
@@ -770,18 +790,18 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             });
     }
 
-    private KernelTurn MapTurn(SessionRef session, JsonElement turn)
+    private static KernelTurn MapTurn(SessionRef session, JsonElement turn)
     {
-        var id = GetString(turn, "id") ?? throw new CodexProtocolException("Turn has no id.");
-        var startedAt = FromUnixMilliseconds(GetInt64(turn, "startedAt")) ?? DateTimeOffset.UtcNow;
+        string id = GetString(turn, "id") ?? throw new CodexProtocolException("Turn has no id.");
+        DateTimeOffset startedAt = FromUnixMilliseconds(GetInt64(turn, "startedAt")) ?? DateTimeOffset.UtcNow;
         return new KernelTurn(session, id, MapTurnStatus(GetString(turn, "status")), startedAt);
     }
 
-    private KernelItem MapItem(JsonElement item, KernelItemStatus? forcedStatus)
+    private static KernelItem MapItem(JsonElement item, KernelItemStatus? forcedStatus)
     {
-        var id = GetString(item, "id") ?? "unknown";
-        var type = GetString(item, "type") ?? "unknown";
-        var kind = type switch
+        string id = GetString(item, "id") ?? "unknown";
+        string type = GetString(item, "type") ?? "unknown";
+        KernelItemKind kind = type switch
         {
             "userMessage" => KernelItemKind.UserMessage,
             "agentMessage" => KernelItemKind.AssistantMessage,
@@ -793,9 +813,9 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             "collabAgentToolCall" or "subAgentActivity" => KernelItemKind.Subagent,
             _ => KernelItemKind.Notice
         };
-        var status = forcedStatus ?? MapItemStatus(GetString(item, "status"));
-        var content = MapItemContent(item, type, id);
-        var now = DateTimeOffset.UtcNow;
+        KernelItemStatus status = forcedStatus ?? MapItemStatus(GetString(item, "status"));
+        IReadOnlyList<ContentBlock> content = MapItemContent(item, type, id);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         return new KernelItem(id, kind, status, type, content, now, now, VendorData: VendorJson.Sanitize(item));
     }
 
@@ -810,14 +830,14 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         }
         else if (type == "reasoning")
         {
-            var summary = item.TryGetProperty("summary", out var summaries) && summaries.ValueKind == JsonValueKind.Array
+            string summary = item.TryGetProperty("summary", out JsonElement summaries) && summaries.ValueKind == JsonValueKind.Array
                 ? string.Join("\n", summaries.EnumerateArray().Select(value => value.GetString()))
                 : string.Empty;
             content.Add(new ReasoningContentBlock(summary));
         }
-        else if (type == "userMessage" && item.TryGetProperty("content", out var userContent))
+        else if (type == "userMessage" && item.TryGetProperty("content", out JsonElement userContent))
         {
-            foreach (var value in userContent.EnumerateArray())
+            foreach (JsonElement value in userContent.EnumerateArray())
             {
                 if (GetString(value, "type") == "text")
                 {
@@ -827,18 +847,18 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         }
         else if (type == "commandExecution")
         {
-            var command = GetString(item, "command") ?? string.Empty;
+            string command = GetString(item, "command") ?? string.Empty;
             content.Add(new ToolCallContentBlock(id, "command", JsonSerializer.SerializeToElement(new { command, cwd = GetString(item, "cwd") }), command));
             if (GetString(item, "aggregatedOutput") is { } output)
             {
                 content.Add(new ToolResultContentBlock(id, GetInt64(item, "exitCode") is 0, output));
             }
         }
-        else if (type == "fileChange" && item.TryGetProperty("changes", out var changes))
+        else if (type == "fileChange" && item.TryGetProperty("changes", out JsonElement changes))
         {
-            foreach (var change in changes.EnumerateArray())
+            foreach (JsonElement change in changes.EnumerateArray())
             {
-                var path = GetString(change, "path") ?? "unknown";
+                string path = GetString(change, "path") ?? "unknown";
                 content.Add(new FileChangeContentBlock(
                     path,
                     GetString(change, "kind") ?? "update"));
@@ -858,7 +878,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private static KernelItem MapDiffItem(string id, string diff, JsonElement vendorData)
     {
-        var now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         return new KernelItem(
             id,
             KernelItemKind.Diff,
@@ -887,18 +907,24 @@ public sealed class CodexKernelAdapter : IKernelAdapter
         KernelEventData data,
         JsonElement vendorData)
     {
-        var sequence = Interlocked.Increment(ref _sequence);
-        _events.Writer.TryWrite(new KernelEvent(
-            AdapterId,
-            _profile.ProfileId,
-            threadId,
-            turnId,
-            itemId,
-            sequence,
-            DateTimeOffset.UtcNow,
-            kind,
-            data,
-            VendorJson.Sanitize(vendorData)));
+        long sequence = Interlocked.Increment(ref _sequence);
+        try
+        {
+            _events.Writer.WriteAsync(new KernelEvent(
+                AdapterId,
+                _profile.ProfileId,
+                threadId,
+                turnId,
+                itemId,
+                sequence,
+                DateTimeOffset.UtcNow,
+                kind,
+                data,
+                VendorJson.Sanitize(vendorData)), _lifetime.Token).AsTask().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
     }
 
     private void EmitDiagnostic(
@@ -915,7 +941,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private void OnDiagnostic(string message)
     {
-        var empty = JsonSerializer.SerializeToElement(new { });
+        JsonElement empty = JsonSerializer.SerializeToElement(new { });
         EmitDiagnostic("CODEX_STDIO", DiagnosticSeverity.Warning, message, empty);
     }
 
@@ -952,7 +978,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     private static object[] MapInput(TurnInput input)
     {
         var items = new List<object>();
-        foreach (var content in input.Content)
+        foreach (ContentBlock content in input.Content)
         {
             switch (content)
             {
@@ -967,7 +993,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             }
         }
 
-        foreach (var path in input.ReferencedPaths ?? Array.Empty<string>())
+        foreach (string path in input.ReferencedPaths ?? [])
         {
             items.Add(new { type = "mention", name = Path.GetFileName(path), path });
         }
@@ -977,7 +1003,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
             throw new ArgumentException("Turn input must contain at least one supported content block.", nameof(input));
         }
 
-        return items.ToArray();
+        return [.. items];
     }
 
     private static string? NormalizeApprovalMode(string? mode) => mode?.ToLowerInvariant() switch
@@ -1000,12 +1026,12 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private static SessionStatus MapSessionStatus(JsonElement thread)
     {
-        if (!thread.TryGetProperty("status", out var status))
+        if (!thread.TryGetProperty("status", out JsonElement status))
         {
             return SessionStatus.Idle;
         }
 
-        var type = status.ValueKind == JsonValueKind.String ? status.GetString() : GetString(status, "type");
+        string? type = status.ValueKind == JsonValueKind.String ? status.GetString() : GetString(status, "type");
         if (type == "systemError")
         {
             return SessionStatus.Failed;
@@ -1013,7 +1039,7 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
         if (type == "active")
         {
-            if (status.TryGetProperty("activeFlags", out var flags) && flags.ValueKind == JsonValueKind.Array &&
+            if (status.TryGetProperty("activeFlags", out JsonElement flags) && flags.ValueKind == JsonValueKind.Array &&
                 flags.EnumerateArray().Any(flag => flag.GetString() == "waitingOnApproval"))
             {
                 return SessionStatus.WaitingForApproval;
@@ -1043,18 +1069,18 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     };
 
     private static JsonElement RequiredProperty(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var property)
+        value.TryGetProperty(name, out JsonElement property)
             ? property.Clone()
             : throw new CodexProtocolException($"Codex result has no '{name}' property.");
 
     private static IEnumerable<JsonElement> GetArray(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Array
+        value.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.Array
             ? property.EnumerateArray().Select(item => item.Clone())
-            : Enumerable.Empty<JsonElement>();
+            : [];
 
     private static string? GetString(JsonElement value, string name)
     {
-        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out var property) ||
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out JsonElement property) ||
             property.ValueKind == JsonValueKind.Null)
         {
             return null;
@@ -1064,18 +1090,18 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     }
 
     private static bool? GetBoolean(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) &&
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) &&
         property.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? property.GetBoolean()
             : null;
 
     private static long? GetInt64(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) && property.TryGetInt64(out var result)
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.TryGetInt64(out long result)
             ? result
             : null;
 
     private static long? GetNestedInt64(JsonElement value, string parent, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(parent, out var nested)
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(parent, out JsonElement nested)
             ? GetInt64(nested, name)
             : null;
 
@@ -1096,20 +1122,20 @@ public sealed class CodexKernelAdapter : IKernelAdapter
 
     private static string? ExtractThreadDiff(JsonElement result, string? nativeTurnOrItemId)
     {
-        if (!result.TryGetProperty("thread", out var thread) ||
-            !thread.TryGetProperty("turns", out var turns) ||
+        if (!result.TryGetProperty("thread", out JsonElement thread) ||
+            !thread.TryGetProperty("turns", out JsonElement turns) ||
             turns.ValueKind != JsonValueKind.Array)
         {
             return null;
         }
 
         var fragments = new List<string>();
-        foreach (var turn in turns.EnumerateArray())
+        foreach (JsonElement turn in turns.EnumerateArray())
         {
-            var turnId = GetString(turn, "id");
+            string? turnId = GetString(turn, "id");
             if (nativeTurnOrItemId is not null && turnId != nativeTurnOrItemId)
             {
-                var containsItem = turn.TryGetProperty("items", out var candidateItems) &&
+                bool containsItem = turn.TryGetProperty("items", out JsonElement candidateItems) &&
                     candidateItems.ValueKind == JsonValueKind.Array &&
                     candidateItems.EnumerateArray().Any(item => GetString(item, "id") == nativeTurnOrItemId);
                 if (!containsItem)
@@ -1118,14 +1144,14 @@ public sealed class CodexKernelAdapter : IKernelAdapter
                 }
             }
 
-            if (!turn.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+            if (!turn.TryGetProperty("items", out JsonElement items) || items.ValueKind != JsonValueKind.Array)
             {
                 continue;
             }
 
-            foreach (var item in items.EnumerateArray().Where(item => GetString(item, "type") == "fileChange"))
+            foreach (JsonElement item in items.EnumerateArray().Where(item => GetString(item, "type") == "fileChange"))
             {
-                if (!item.TryGetProperty("changes", out var changes) || changes.ValueKind != JsonValueKind.Array)
+                if (!item.TryGetProperty("changes", out JsonElement changes) || changes.ValueKind != JsonValueKind.Array)
                 {
                     continue;
                 }
@@ -1143,8 +1169,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter
     private static string[] ToStringArray(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.Array => value.EnumerateArray().Select(item => item.ToString()).ToArray(),
-        JsonValueKind.String => new[] { value.GetString()! },
-        _ => new[] { value.ToString() }
+        JsonValueKind.String => [value.GetString()!],
+        _ => [value.ToString()]
     };
 
     private static IReadOnlyList<AuthenticationMethod> SupportedAuthenticationMethods { get; } =

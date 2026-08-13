@@ -28,7 +28,7 @@ public sealed class OpenCodeApiClient : IDisposable
         int maximumResponseBytes = 8 * 1024 * 1024)
     {
         if (!baseUri.IsLoopback) throw new ArgumentException("OpenCode Server must use a loopback URI.", nameof(baseUri));
-        if (maximumResponseBytes < 1024) throw new ArgumentOutOfRangeException(nameof(maximumResponseBytes));
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumResponseBytes, 1024);
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
         _ownsClient = true;
         _maximumResponseBytes = maximumResponseBytes;
@@ -98,7 +98,7 @@ public sealed class OpenCodeApiClient : IDisposable
         if (!string.IsNullOrWhiteSpace(directory)) query.Add($"directory={Uri.EscapeDataString(directory)}");
         if (limit > 0) query.Add($"limit={limit}");
         if (!string.IsNullOrWhiteSpace(cursor)) query.Add($"start={Uri.EscapeDataString(cursor)}");
-        var path = "session" + (query.Count == 0 ? string.Empty : "?" + string.Join('&', query));
+        string path = "session" + (query.Count == 0 ? string.Empty : "?" + string.Join('&', query));
         return SendJsonAsync<IReadOnlyList<OpenCodeSession>>(HttpMethod.Get, path, null, cancellationToken);
     }
 
@@ -160,7 +160,7 @@ public sealed class OpenCodeApiClient : IDisposable
         string? before,
         CancellationToken cancellationToken)
     {
-        var path = WithDirectory($"session/{Escape(sessionId)}/message", directory);
+        string path = WithDirectory($"session/{Escape(sessionId)}/message", directory);
         path += path.Contains('?', StringComparison.Ordinal) ? "&" : "?";
         path += $"limit={limit}";
         if (!string.IsNullOrWhiteSpace(before)) path += $"&before={Uri.EscapeDataString(before)}";
@@ -194,7 +194,7 @@ public sealed class OpenCodeApiClient : IDisposable
         string? directory,
         CancellationToken cancellationToken)
     {
-        var path = WithDirectory($"session/{Escape(sessionId)}/diff", directory);
+        string path = WithDirectory($"session/{Escape(sessionId)}/diff", directory);
         if (!string.IsNullOrWhiteSpace(messageId)) path += (path.Contains('?', StringComparison.Ordinal) ? "&" : "?") + $"messageID={Escape(messageId)}";
         return SendJsonAsync<IReadOnlyList<OpenCodeFileDiff>>(HttpMethod.Get, path, null, cancellationToken);
     }
@@ -258,7 +258,7 @@ public sealed class OpenCodeApiClient : IDisposable
     public Task<IReadOnlyList<JsonElement>> GetAgentsAsync(string? directory, CancellationToken cancellationToken)
         => SendJsonAsync<IReadOnlyList<JsonElement>>(HttpMethod.Get, WithDirectory("agent", directory), null, cancellationToken);
 
-    public HttpRequestMessage CreateEventRequest(string? directory, string? lastEventId)
+    public static HttpRequestMessage CreateEventRequest(string? directory, string? lastEventId)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, WithDirectory("event", directory));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
@@ -269,12 +269,15 @@ public sealed class OpenCodeApiClient : IDisposable
     public Task<HttpResponseMessage> SendEventRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         => _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
+    internal async Task<string> ReadResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
+        => Encoding.UTF8.GetString(await ReadBoundedAsync(content, _maximumResponseBytes, cancellationToken).ConfigureAwait(false));
+
     private async Task<T> SendJsonAsync<T>(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        var bytes = await ReadBoundedAsync(response.Content, _maximumResponseBytes, cancellationToken).ConfigureAwait(false);
+        using HttpResponseMessage response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        byte[] bytes = await ReadBoundedAsync(response.Content, _maximumResponseBytes, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new OpenCodeApiException((int)response.StatusCode, method.Method, path, Encoding.UTF8.GetString(bytes));
@@ -294,23 +297,23 @@ public sealed class OpenCodeApiClient : IDisposable
     private async Task SendNoContentAsync(HttpMethod method, string path, object body, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(method, path) { Content = JsonContent.Create(body, options: JsonOptions) };
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using HttpResponseMessage response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         if (response.IsSuccessStatusCode) return;
-        var bytes = await ReadBoundedAsync(response.Content, _maximumResponseBytes, cancellationToken).ConfigureAwait(false);
+        byte[] bytes = await ReadBoundedAsync(response.Content, _maximumResponseBytes, cancellationToken).ConfigureAwait(false);
         throw new OpenCodeApiException((int)response.StatusCode, method.Method, path, Encoding.UTF8.GetString(bytes));
     }
 
-    private static async Task<byte[]> ReadBoundedAsync(HttpContent content, int maximumBytes, CancellationToken cancellationToken)
+    internal static async Task<byte[]> ReadBoundedAsync(HttpContent content, int maximumBytes, CancellationToken cancellationToken)
     {
         if (content.Headers.ContentLength is long length && length > maximumBytes)
             throw new OpenCodePayloadTooLargeException(maximumBytes);
 
-        await using var input = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using Stream input = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var output = new MemoryStream();
-        var buffer = new byte[8192];
+        byte[] buffer = new byte[8192];
         while (true)
         {
-            var read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            int read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (read == 0) break;
             if (output.Length + read > maximumBytes) throw new OpenCodePayloadTooLargeException(maximumBytes);
             output.Write(buffer, 0, read);

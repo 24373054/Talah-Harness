@@ -40,8 +40,8 @@ public sealed class TlahNativeRuntime : ITlahNativeRuntime
             ValidateOnBuild = true,
             ValidateScopes = true
         });
-        await using var scope = _services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<TlahDbContext>();
+        await using AsyncServiceScope scope = _services.CreateAsyncScope();
+        TlahDbContext db = scope.ServiceProvider.GetRequiredService<TlahDbContext>();
         await db.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
         db.Initialize();
     }
@@ -55,8 +55,8 @@ public sealed class TlahNativeRuntime : ITlahNativeRuntime
     public Task ConfigureAsync(string provider, string secret, Uri? baseUri, CancellationToken cancellationToken) =>
         InScopeAsync(async sp =>
         {
-            var settings = sp.GetRequiredService<ISettingsService>();
-            var info = settings.GetSupportedProviders().First(p => string.Equals(p.Key, provider, StringComparison.OrdinalIgnoreCase));
+            ISettingsService settings = sp.GetRequiredService<ISettingsService>();
+            ProviderInfo info = settings.GetSupportedProviders().First(p => string.Equals(p.Key, provider, StringComparison.OrdinalIgnoreCase));
             await settings.UpdateGlobalSettingsAsync(new GlobalSettingsUpdateDto(
                 Provider: info.Key,
                 ApiKey: secret,
@@ -82,7 +82,7 @@ public sealed class TlahNativeRuntime : ITlahNativeRuntime
     public Task<IReadOnlyList<string>> GetModelsAsync(CancellationToken cancellationToken) =>
         InScopeAsync<IReadOnlyList<string>>(async sp =>
         {
-            var settings = await sp.GetRequiredService<ISettingsService>()
+            GlobalSettingsDto settings = await sp.GetRequiredService<ISettingsService>()
                 .GetGlobalSettingsMaskedAsync(cancellationToken).ConfigureAwait(false);
             return ProviderModelCatalog.FallbackModels(settings.Provider);
         });
@@ -97,7 +97,7 @@ public sealed class TlahNativeRuntime : ITlahNativeRuntime
     public Task<Chat> CreateChatAsync(string title, string workspaceRoot, CancellationToken cancellationToken) =>
         InScopeAsync(async sp =>
         {
-            var chat = await sp.GetRequiredService<IChatService>().CreateChatAsync(title, cancellationToken).ConfigureAwait(false);
+            Chat chat = await sp.GetRequiredService<IChatService>().CreateChatAsync(title, cancellationToken).ConfigureAwait(false);
             await new WorkspaceRootService().SetRootAsync(chat.Id, workspaceRoot, cancellationToken).ConfigureAwait(false);
             return chat;
         });
@@ -147,15 +147,15 @@ public sealed class TlahNativeRuntime : ITlahNativeRuntime
 
     private async Task<T> InScopeAsync<T>(Func<IServiceProvider, Task<T>> action)
     {
-        var services = _services ?? throw new InvalidOperationException("The native TLAH runtime is not initialized.");
-        await using var scope = services.CreateAsyncScope();
+        ServiceProvider services = _services ?? throw new InvalidOperationException("The native TLAH runtime is not initialized.");
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
         return await action(scope.ServiceProvider).ConfigureAwait(false);
     }
 
     private async Task InScopeAsync(Func<IServiceProvider, Task> action)
     {
-        var services = _services ?? throw new InvalidOperationException("The native TLAH runtime is not initialized.");
-        await using var scope = services.CreateAsyncScope();
+        ServiceProvider services = _services ?? throw new InvalidOperationException("The native TLAH runtime is not initialized.");
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
         await action(scope.ServiceProvider).ConfigureAwait(false);
     }
 }
