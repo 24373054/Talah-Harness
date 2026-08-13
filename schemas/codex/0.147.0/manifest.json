@@ -1,0 +1,21 @@
+{
+  "product": "codex-cli",
+  "version": "0.147.0",
+  "generatedAtUtc": "2026-08-13T10:15:00Z",
+  "generator": "codex app-server generate-json-schema",
+  "command": "codex app-server generate-json-schema --experimental --out schemas/codex/0.147.0",
+  "experimentalMembersIncluded": true,
+  "transport": "codex app-server --stdio",
+  "fileCountBeforeManifest": 361,
+  "bundles": [
+    {
+      "path": "codex_app_server_protocol.schemas.json",
+      "sha256": "BABFD5C98CD978DD858B4762CDFBC9FBA941E1A0E4053DE0050E4082AE1F075A"
+    },
+    {
+      "path": "codex_app_server_protocol.v2.schemas.json",
+      "sha256": "FF10829CD75B67297019B39AB508AC699198574663579AA18336B7DC55EA178F"
+    }
+  ],
+  "source": "Installed official OpenAI Codex CLI schema generator"
+}
