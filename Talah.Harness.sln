@@ -8,6 +8,16 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{9BFFC09F-B7E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.App", "src\Talah.Harness.App\Talah.Harness.App.csproj", "{1984CCB3-4FD8-4711-9CBE-3F0495D12827}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Runtime", "src\Talah.Harness.Runtime\Talah.Harness.Runtime.csproj", "{725B5649-9F06-4FFD-A38E-D56F18051E51}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Persistence", "src\Talah.Harness.Persistence\Talah.Harness.Persistence.csproj", "{D6A155AD-5B2C-4459-9AE0-07460D650A35}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4DFFE8AA-97F7-4C9D-A752-A385F5112DED}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Runtime.Tests", "tests\Talah.Harness.Runtime.Tests\Talah.Harness.Runtime.Tests.csproj", "{7583210D-7627-4996-93F0-B594336BF71A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Persistence.Tests", "tests\Talah.Harness.Persistence.Tests\Talah.Harness.Persistence.Tests.csproj", "{189D1C01-62E3-4213-89D3-171C4BDFC23F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -22,11 +32,31 @@ Global
 		{1984CCB3-4FD8-4711-9CBE-3F0495D12827}.Debug|Any CPU.Build.0 = Debug|x64
 		{1984CCB3-4FD8-4711-9CBE-3F0495D12827}.Release|Any CPU.ActiveCfg = Release|x64
 		{1984CCB3-4FD8-4711-9CBE-3F0495D12827}.Release|Any CPU.Build.0 = Release|x64
+		{725B5649-9F06-4FFD-A38E-D56F18051E51}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{725B5649-9F06-4FFD-A38E-D56F18051E51}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{725B5649-9F06-4FFD-A38E-D56F18051E51}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{725B5649-9F06-4FFD-A38E-D56F18051E51}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D6A155AD-5B2C-4459-9AE0-07460D650A35}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D6A155AD-5B2C-4459-9AE0-07460D650A35}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D6A155AD-5B2C-4459-9AE0-07460D650A35}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D6A155AD-5B2C-4459-9AE0-07460D650A35}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7583210D-7627-4996-93F0-B594336BF71A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7583210D-7627-4996-93F0-B594336BF71A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7583210D-7627-4996-93F0-B594336BF71A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7583210D-7627-4996-93F0-B594336BF71A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{189D1C01-62E3-4213-89D3-171C4BDFC23F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{1984CCB3-4FD8-4711-9CBE-3F0495D12827} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{725B5649-9F06-4FFD-A38E-D56F18051E51} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{D6A155AD-5B2C-4459-9AE0-07460D650A35} = {9BFFC09F-B7E8-442B-8F87-87A14E5A2B98}
+		{7583210D-7627-4996-93F0-B594336BF71A} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{189D1C01-62E3-4213-89D3-171C4BDFC23F} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
 	EndGlobalSection
 EndGlobal
