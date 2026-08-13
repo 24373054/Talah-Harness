@@ -52,10 +52,16 @@ public sealed partial class WindowsJobObject : IDisposable
     public void Assign(System.Diagnostics.Process process)
     {
         ArgumentNullException.ThrowIfNull(process);
+        Assign(process.SafeHandle, process.Id);
+    }
+
+    internal void Assign(SafeProcessHandle processHandle, int processId)
+    {
+        ArgumentNullException.ThrowIfNull(processHandle);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!NativeMethods.AssignProcessToJobObject(_handle, process.SafeHandle))
+        if (!NativeMethods.AssignProcessToJobObject(_handle, processHandle))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not assign process {process.Id} to its Job Object.");
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not assign process {processId} to its Job Object.");
         }
     }
 

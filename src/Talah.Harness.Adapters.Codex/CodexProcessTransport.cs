@@ -7,19 +7,21 @@ namespace Talah.Harness.Adapters.Codex;
 internal sealed class CodexProcessTransport : ICodexTransport
 {
     private readonly Process _process;
+    private readonly WindowsJobProcess _jobProcess;
     private readonly WindowsJobObject _job;
 
-    private CodexProcessTransport(Process process, WindowsJobObject job)
+    private CodexProcessTransport(WindowsJobProcess jobProcess, WindowsJobObject job)
     {
-        _process = process;
+        _jobProcess = jobProcess;
+        _process = jobProcess.Process;
         _job = job;
     }
 
-    public TextWriter Input => _process.StandardInput;
+    public TextWriter Input => _jobProcess.StandardInput;
 
-    public TextReader Output => _process.StandardOutput;
+    public TextReader Output => _jobProcess.StandardOutput;
 
-    public TextReader Error => _process.StandardError;
+    public TextReader Error => _jobProcess.StandardError;
 
     public Task Completion => _process.WaitForExitAsync();
 
@@ -50,26 +52,17 @@ internal sealed class CodexProcessTransport : ICodexTransport
             startInfo.Environment[pair.Key] = pair.Value;
         }
 
-        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var job = new WindowsJobObject();
+        WindowsJobProcess? jobProcess = null;
         try
         {
-            if (!process.Start()) throw new InvalidOperationException("Failed to start Codex App Server.");
-            job.Assign(process);
-            process.StandardInput.AutoFlush = true;
-            return new CodexProcessTransport(process, job);
+            jobProcess = WindowsJobProcess.Start(startInfo, job);
+            jobProcess.StandardInput.AutoFlush = true;
+            return new CodexProcessTransport(jobProcess, job);
         }
         catch
         {
-            try
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            process.Dispose();
+            jobProcess?.Dispose();
             job.Dispose();
             throw;
         }
@@ -132,7 +125,7 @@ internal sealed class CodexProcessTransport : ICodexTransport
     {
         try
         {
-            _process.StandardInput.Close();
+            _jobProcess.StandardInput.Close();
             if (!_process.HasExited)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -150,7 +143,7 @@ internal sealed class CodexProcessTransport : ICodexTransport
         finally
         {
             _job.Dispose();
-            _process.Dispose();
+            _jobProcess.Dispose();
         }
     }
 

@@ -122,6 +122,30 @@ public sealed class RuntimeTests
     }
 
     [Fact]
+    public async Task SuspendedLauncherPreservesWindowsArgumentBoundaries()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var temp = new TemporaryDirectory();
+        string[] expected = ["space value", "quote\"inside", "trailing\\"];
+        string script = Path.Combine(temp.Path, "echo-arguments.ps1");
+        await File.WriteAllTextAsync(script, "[Console]::Out.WriteLine(($args | ForEach-Object { '<' + $_ + '>' }) -join '|')");
+        var supervisor = new ProcessSupervisor(new ProcessLaunchOptions(
+            PowerShellPath,
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, .. expected],
+            temp.Path,
+            MinimalEnvironment()));
+        await using (supervisor)
+        {
+            await supervisor.StartAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var messages = supervisor.ReadProtocolMessagesAsync(timeout.Token).GetAsyncEnumerator(timeout.Token);
+            Assert.True(await messages.MoveNextAsync());
+            Assert.Equal(string.Join('|', expected.Select(value => $"<{value}>")), messages.Current.Text);
+            await supervisor.WaitForExitAsync(timeout.Token);
+        }
+    }
+
+    [Fact]
     public async Task Supervisor_ReportsBoundedProtocolQueueOverflow()
     {
         if (!OperatingSystem.IsWindows()) return;

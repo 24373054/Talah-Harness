@@ -42,6 +42,7 @@ public sealed class ProcessSupervisor : IAsyncDisposable
     private readonly Channel<ProcessMessage> _protocol;
     private readonly CancellationTokenSource _disposeCancellation = new();
     private Process? _process;
+    private WindowsJobProcess? _jobProcess;
     private WindowsJobObject? _job;
     private Task? _standardErrorPump;
     private Task? _standardOutputPump;
@@ -144,30 +145,29 @@ public sealed class ProcessSupervisor : IAsyncDisposable
 
             foreach (string argument in _options.Arguments) startInfo.ArgumentList.Add(argument);
 
-            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            process.Exited += OnExited;
             var job = new WindowsJobObject();
+            WindowsJobProcess? jobProcess = null;
             try
             {
-                if (!process.Start()) throw new InvalidOperationException("The sidecar process did not start.");
-                job.Assign(process);
+                jobProcess = WindowsJobProcess.Start(startInfo, job);
             }
             catch
             {
-                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                process.Dispose();
+                jobProcess?.Dispose();
                 job.Dispose();
                 throw;
             }
 
+            Process process = jobProcess.Process;
             _process = process;
+            _jobProcess = jobProcess;
             _job = job;
             _starts++;
-            _standardErrorPump = PumpStandardErrorAsync(process.StandardError, _disposeCancellation.Token);
-            if (_options.ProtocolStdout)
-            {
-                _standardOutputPump = PumpStandardOutputAsync(process.StandardOutput, _disposeCancellation.Token);
-            }
+            _standardErrorPump = PumpStandardErrorAsync(jobProcess.StandardError, _disposeCancellation.Token);
+            _standardOutputPump = _options.ProtocolStdout
+                ? PumpStandardOutputAsync(jobProcess.StandardOutput, _disposeCancellation.Token)
+                : DrainStandardOutputAsync(jobProcess.StandardOutput, _disposeCancellation.Token);
+            _ = ObserveExitAsync(process);
 
             await Task.Yield();
             if (process.HasExited)
@@ -187,8 +187,9 @@ public sealed class ProcessSupervisor : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         Process? process = _process;
         if (process is null || process.HasExited) throw new InvalidOperationException("The sidecar is not running.");
-        await process.StandardInput.WriteAsync(value.AsMemory(), cancellationToken).ConfigureAwait(false);
-        await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+        StreamWriter input = _jobProcess?.StandardInput ?? throw new InvalidOperationException("The sidecar input stream is unavailable.");
+        await input.WriteAsync(value.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await input.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public Task<ProcessExitInformation> WaitForExitAsync(CancellationToken cancellationToken = default) =>
@@ -206,10 +207,11 @@ public sealed class ProcessSupervisor : IAsyncDisposable
             {
                 if (_options.GracefulShutdownInput is not null)
                 {
-                    await process.StandardInput.WriteAsync(_options.GracefulShutdownInput.AsMemory(), cancellationToken).ConfigureAwait(false);
-                    await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    StreamWriter input = _jobProcess?.StandardInput ?? throw new InvalidOperationException("The sidecar input stream is unavailable.");
+                    await input.WriteAsync(_options.GracefulShutdownInput.AsMemory(), cancellationToken).ConfigureAwait(false);
+                    await input.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
-                process.StandardInput.Close();
+                _jobProcess?.StandardInput.Close();
                 TimeSpan timeout = (_options.Timeouts ?? ProcessTimeouts.Default).Shutdown;
                 try
                 {
@@ -246,7 +248,9 @@ public sealed class ProcessSupervisor : IAsyncDisposable
             IEnumerable<Task> pumps = new[] { _standardErrorPump, _standardOutputPump }.Where(static task => task is not null).Cast<Task>();
             try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch (OperationCanceledException) { } catch (TimeoutException) { }
             _job?.Dispose();
-            _process?.Dispose();
+            _jobProcess?.Dispose();
+            _jobProcess = null;
+            _process = null;
             _disposeCancellation.Dispose();
             _lifecycle.Dispose();
         }
@@ -286,9 +290,24 @@ public sealed class ProcessSupervisor : IAsyncDisposable
         catch (IOException) { }
     }
 
-    private void OnExited(object? sender, EventArgs args)
+    private static async Task DrainStandardOutputAsync(TextReader reader, CancellationToken cancellationToken)
     {
-        if (sender is not Process process) return;
+        char[] buffer = new char[4_096];
+        try
+        {
+            while (await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false) != 0)
+            {
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (ObjectDisposedException) { }
+        catch (IOException) { }
+    }
+
+    private async Task ObserveExitAsync(Process process)
+    {
+        try { await process.WaitForExitAsync(_disposeCancellation.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (_disposeCancellation.IsCancellationRequested) { return; }
         int exitCode;
         try { exitCode = process.ExitCode; } catch (InvalidOperationException) { return; }
         _exit.TrySetResult(new ProcessExitInformation(exitCode, DateTimeOffset.UtcNow, _forceRequested, !_forceRequested && exitCode != 0));
@@ -299,7 +318,8 @@ public sealed class ProcessSupervisor : IAsyncDisposable
         if (_process is null) return;
         _job?.Dispose();
         _job = null;
-        _process.Dispose();
+        _jobProcess?.Dispose();
+        _jobProcess = null;
         _process = null;
     }
 

@@ -87,31 +87,34 @@ public sealed class OpenCodeExecutableDiscovery : IOpenCodeExecutableDiscovery
 
     private static async Task<string?> ReadVersionAsync(string executable, CancellationToken cancellationToken)
     {
-        using var process = new Process
+        var startInfo = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = executable,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = false
-            }
+            FileName = executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
-        ConfigureMinimalEnvironment(process.StartInfo);
-        process.StartInfo.ArgumentList.Add("--version");
+        ConfigureMinimalEnvironment(startInfo);
+        startInfo.ArgumentList.Add("--version");
         using var job = new WindowsJobObject();
+        WindowsJobProcess? jobProcess = null;
         try
         {
-            if (!process.Start()) return null;
-            job.Assign(process);
-            Task<string?> outputTask = ReadBoundedLineAsync(process.StandardOutput, 4_096, cancellationToken);
+            jobProcess = WindowsJobProcess.Start(startInfo, job);
+            Process process = jobProcess.Process;
+            Task<string?> outputTask = ReadBoundedLineAsync(jobProcess.StandardOutput, 4_096, cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             return process.ExitCode == 0 ? (await outputTask.ConfigureAwait(false))?.Trim() : null;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             return null;
+        }
+        finally
+        {
+            jobProcess?.Dispose();
         }
     }
 
@@ -181,25 +184,16 @@ public sealed class OpenCodeProcessSupervisor : IOpenCodeProcessSupervisor
         foreach (string argument in startInfo.Arguments) psi.ArgumentList.Add(argument);
         foreach (KeyValuePair<string, string> pair in startInfo.Environment) psi.Environment[pair.Key] = pair.Value;
 
-        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var job = new WindowsJobObject();
+        WindowsJobProcess? jobProcess = null;
         try
         {
-            if (!process.Start()) throw new OpenCodeAdapterException("The OpenCode process could not be started.");
-            job.Assign(process);
-            return Task.FromResult<IOpenCodeProcessHandle>(new ProcessHandle(process, job));
+            jobProcess = WindowsJobProcess.Start(psi, job);
+            return Task.FromResult<IOpenCodeProcessHandle>(new ProcessHandle(jobProcess, job));
         }
         catch
         {
-            try
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            process.Dispose();
+            jobProcess?.Dispose();
             job.Dispose();
             throw;
         }
@@ -208,6 +202,7 @@ public sealed class OpenCodeProcessSupervisor : IOpenCodeProcessSupervisor
     private sealed class ProcessHandle : IOpenCodeProcessHandle
     {
         private readonly Process _process;
+        private readonly WindowsJobProcess _jobProcess;
         private readonly WindowsJobObject _job;
         private readonly CancellationTokenSource _lifetime = new();
         private readonly Channel<string> _standardOutput = CreateLineChannel();
@@ -215,12 +210,13 @@ public sealed class OpenCodeProcessSupervisor : IOpenCodeProcessSupervisor
         private readonly Task _standardOutputPump;
         private readonly Task _standardErrorPump;
 
-        public ProcessHandle(Process process, WindowsJobObject job)
+        public ProcessHandle(WindowsJobProcess jobProcess, WindowsJobObject job)
         {
-            _process = process;
+            _jobProcess = jobProcess;
+            _process = jobProcess.Process;
             _job = job;
-            _standardOutputPump = PumpAsync(process.StandardOutput, _standardOutput.Writer, "stdout", _lifetime.Token);
-            _standardErrorPump = PumpAsync(process.StandardError, _standardError.Writer, "stderr", _lifetime.Token);
+            _standardOutputPump = PumpAsync(jobProcess.StandardOutput, _standardOutput.Writer, "stdout", _lifetime.Token);
+            _standardErrorPump = PumpAsync(jobProcess.StandardError, _standardError.Writer, "stderr", _lifetime.Token);
         }
 
         public bool HasExited => _process.HasExited;
@@ -277,7 +273,7 @@ public sealed class OpenCodeProcessSupervisor : IOpenCodeProcessSupervisor
             {
             }
             _job.Dispose();
-            _process.Dispose();
+            _jobProcess.Dispose();
             _lifetime.Dispose();
         }
 
