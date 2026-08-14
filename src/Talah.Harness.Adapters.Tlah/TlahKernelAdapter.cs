@@ -135,10 +135,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         EnsureInitialized();
         if (string.IsNullOrWhiteSpace(credential.Secret))
             throw new ArgumentException("An API key is required.", nameof(credential));
-        if (credential.BaseUri is not null &&
-            !string.Equals(credential.BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(credential.BaseUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Provider base URIs must use HTTP or HTTPS.", nameof(credential));
+        ApiKeyEndpointPolicy.Validate(credential.BaseUri, nameof(credential));
         IReadOnlyList<ProviderInfo> providers = await _runtime.GetProvidersAsync(cancellationToken).ConfigureAwait(false);
         if (!providers.Any(p => string.Equals(p.Key, credential.ProviderId, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("The requested provider is not supported by native TLAH.", nameof(credential));

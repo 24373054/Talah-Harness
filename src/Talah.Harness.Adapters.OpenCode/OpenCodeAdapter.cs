@@ -169,6 +169,7 @@ public sealed class OpenCodeAdapter(
 
     public async Task ConfigureApiKeyAsync(ApiKeyCredential credential, CancellationToken cancellationToken = default)
     {
+        ApiKeyEndpointPolicy.Validate(credential.BaseUri, nameof(credential));
         var metadata = new Dictionary<string, string>(credential.Options ?? new Dictionary<string, string>(), StringComparer.Ordinal);
         if (credential.BaseUri is not null) metadata["baseURL"] = credential.BaseUri.ToString();
         if (!await Api().SetApiKeyAsync(credential.ProviderId, credential.Secret, metadata.Count == 0 ? null : metadata, cancellationToken).ConfigureAwait(false))

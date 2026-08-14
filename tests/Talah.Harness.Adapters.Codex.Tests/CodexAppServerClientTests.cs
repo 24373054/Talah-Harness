@@ -160,8 +160,19 @@ public sealed class CodexAppServerClientTests
         var transport = new FakeCodexTransport(_ => gate.Task);
         await using var client = new CodexAppServerClient(transport, TimeSpan.FromMilliseconds(50));
 
-        await Assert.ThrowsAsync<TimeoutException>(() => client.RequestAsync("blocked-write", new { }));
-        gate.TrySetResult();
+        try
+        {
+            var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+                client.RequestAsync("blocked-write", new { }).WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Contains("Codex App Server request", exception.Message, StringComparison.Ordinal);
+            Assert.True(transport.Aborted);
+            await Assert.ThrowsAsync<CodexProtocolException>(() =>
+                client.RequestAsync("after-poison", new { }));
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
     }
 
     [Fact]

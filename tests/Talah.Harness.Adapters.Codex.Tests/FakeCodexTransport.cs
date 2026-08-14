@@ -32,6 +32,8 @@ internal sealed class FakeCodexTransport : ICodexTransport
 
     public Task Completion => _completion.Task;
 
+    public bool Aborted { get; private set; }
+
     public void Send(object message) => _output.Writer.TryWrite(JsonSerializer.Serialize(message));
 
     public void SendRaw(string line) => _output.Writer.TryWrite(line);
@@ -46,6 +48,12 @@ internal sealed class FakeCodexTransport : ICodexTransport
         _output.Writer.TryComplete();
         _error.Writer.TryComplete();
         _completion.TrySetResult();
+    }
+
+    public void Abort()
+    {
+        Aborted = true;
+        Exit();
     }
 
     private async Task ReceiveFromClientAsync(string line)

@@ -73,6 +73,17 @@ foreach ($workflow in $workflowFiles) {
         if ($reference -notmatch '^[^@\s]+@[0-9a-f]{40}$') { Add-Failure "$($workflow.Name) has an action that is not pinned by a full commit SHA: $reference" }
     }
     if ($content -notmatch 'submodules:\s*recursive') { Add-Failure "$($workflow.Name) does not recursively check out submodules." }
+    if ($workflow.Name -eq 'release.yml') {
+        if ($content -match '(?m)^ {6}(SIGNING_PFX_BASE64|SIGNING_PASSWORD):') {
+            Add-Failure 'release.yml exposes a signing secret at job scope instead of limiting it to a shell step.'
+        }
+        if ($content -match 'SIGNING_PFX_PATH.*GITHUB_ENV') {
+            Add-Failure 'release.yml persists the signing-certificate path across steps.'
+        }
+        if ($content -notmatch '(?s)finally\s*\{.*Remove-Item\s+-LiteralPath\s+\$certificatePath') {
+            Add-Failure 'release.yml does not remove temporary signing material in a finally block.'
+        }
+    }
 }
 
 $submoduleEntry = Get-GitValue -RepositoryRoot $RepositoryRoot -Arguments @('ls-tree', 'HEAD', 'third_party/TLAH-Studio')

@@ -63,6 +63,23 @@ public sealed class OpenCodeProcessTests
     }
 
     [Fact]
+    public async Task ApiKeyRejectsPlaintextRemoteProviderBeforeSendingCredential()
+    {
+        var process = new FakeProcess("OpenCode server listening on http://127.0.0.1:43123");
+        var handler = new RecordingHandler(_ => OpenCodeClientTests.Json("""{"healthy":true,"version":"1.18.9"}"""));
+        var adapter = new OpenCodeAdapter(new StubDiscovery(Compatible()), new FakeSupervisor(process), handler, TimeSpan.FromSeconds(1));
+        await adapter.InitializeAsync(Context());
+        int requestsBeforeCredential = handler.Requests.Count;
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => adapter.ConfigureApiKeyAsync(
+            new ApiKeyCredential("openai", "must-not-leave", new Uri("http://provider.example/v1"))));
+
+        Assert.Contains("HTTPS", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(requestsBeforeCredential, handler.Requests.Count);
+        await adapter.DisposeAsync();
+    }
+
+    [Fact]
     public async Task LivePinnedHealthAndCapturedSchemaSmoke_IsOptInAndNonBillable()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("TALAH_OPENCODE_LIVE"), "1", StringComparison.Ordinal)) return;

@@ -687,9 +687,18 @@ public sealed partial class MainWindow : Window
                 return;
             }
             Uri? baseUri = null;
-            if (!string.IsNullOrWhiteSpace(baseUriBox.Text) && (!Uri.TryCreate(baseUriBox.Text, UriKind.Absolute, out baseUri) || baseUri.Scheme is not ("http" or "https")))
+            if (!string.IsNullOrWhiteSpace(baseUriBox.Text) && !Uri.TryCreate(baseUriBox.Text, UriKind.Absolute, out baseUri))
             {
-                ShowInfo("Invalid provider URI", "Use an absolute HTTP or HTTPS URI.", InfoBarSeverity.Warning);
+                ShowInfo("Invalid provider URI", "Use an absolute HTTPS URI, or HTTP only for a loopback development endpoint.", InfoBarSeverity.Warning);
+                return;
+            }
+            try
+            {
+                ApiKeyEndpointPolicy.Validate(baseUri, nameof(baseUri));
+            }
+            catch (ArgumentException exception)
+            {
+                ShowInfo("Unsafe provider URI", exception.Message, InfoBarSeverity.Warning);
                 return;
             }
             await RunOperationAsync(async () =>

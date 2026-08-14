@@ -137,8 +137,9 @@ profile operations.
   `Launcher`.
 - OpenCode additionally requires a provider ID and accepts the returned OAuth
   callback code through `CompleteLoginAsync`.
-- API-key setup requires a provider ID, accepts an optional absolute HTTP(S)
-  base URI, and calls the adapter protected-credential flow directly.
+- API-key setup requires a provider ID, accepts an optional absolute HTTPS base
+  URI (or HTTP only for a loopback development endpoint), rejects embedded URI
+  credentials, and calls the adapter protected-credential flow directly.
 - Logout delegates to the active adapter; for OpenCode it removes connected
   provider authentication, and for TLAH it clears the protected native
   credential.

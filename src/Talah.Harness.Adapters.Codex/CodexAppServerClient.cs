@@ -24,6 +24,8 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
     private Task<JsonElement>? _initializeTask;
     private long _nextRequestId;
     private int _disposed;
+    private int _transportPoisoned;
+    private string? _terminalFailure;
 
     public CodexAppServerClient(
         ICodexTransport transport,
@@ -63,6 +65,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ThrowIfTransportPoisoned();
         long id = Interlocked.Increment(ref _nextRequestId);
         var source = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pending.TryAdd(id, source))
@@ -77,11 +80,24 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
                 cancellationToken,
                 timeout.Token,
                 _lifetime.Token);
+            bool writeCompleted = false;
             try
             {
                 await WriteAsync(new { id, method, @params = parameters ?? new { } }, linked.Token)
                     .ConfigureAwait(false);
+                writeCompleted = true;
                 return await source.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!writeCompleted)
+            {
+                PoisonTransport(
+                    "Codex App Server transport was aborted because a request write did not complete before cancellation.");
+                if (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Codex App Server request '{method}' timed out after {_requestTimeout}.");
+                }
+
+                throw;
             }
             catch (OperationCanceledException) when (
                 timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -128,6 +144,7 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
 
     private async Task WriteAsync(object value, CancellationToken cancellationToken)
     {
+        ThrowIfTransportPoisoned();
         string json = JsonSerializer.Serialize(value, JsonOptions);
         int bytes = Encoding.UTF8.GetByteCount(json);
         if (bytes > _maximumMessageBytes)
@@ -137,14 +154,94 @@ internal sealed class CodexAppServerClient : IAsyncDisposable
         }
 
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool releaseWriteLock = true;
         try
         {
-            await _transport.Input.WriteLineAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await _transport.Input.FlushAsync(cancellationToken).ConfigureAwait(false);
+            ThrowIfTransportPoisoned();
+            Task write = WriteToTransportAsync(json, cancellationToken);
+            try
+            {
+                await write.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !write.IsCompleted)
+            {
+                releaseWriteLock = false;
+                _ = ObserveAbandonedWriteAndReleaseLockAsync(write);
+                PoisonTransport(
+                    "Codex App Server transport was aborted because its standard-input write did not honor cancellation.");
+                throw;
+            }
         }
         finally
         {
-            _writeLock.Release();
+            if (releaseWriteLock)
+            {
+                _writeLock.Release();
+            }
+        }
+    }
+
+    private async Task WriteToTransportAsync(string json, CancellationToken cancellationToken)
+    {
+        await _transport.Input.WriteLineAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await _transport.Input.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ObserveAbandonedWriteAndReleaseLockAsync(Task write)
+    {
+        try
+        {
+            await write.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            DiagnosticReceived?.Invoke(Redact($"Abandoned Codex transport write completed with an error: {exception.Message}"));
+        }
+        finally
+        {
+            try
+            {
+                _writeLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposal won the race after an uncooperative transport write.
+            }
+        }
+    }
+
+    private void PoisonTransport(string message)
+    {
+        if (Interlocked.CompareExchange(ref _transportPoisoned, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _terminalFailure = message;
+        var failure = new CodexProtocolException(message);
+        foreach (KeyValuePair<long, TaskCompletionSource<JsonElement>> pair in _pending)
+        {
+            pair.Value.TrySetException(failure);
+        }
+
+        try
+        {
+            _transport.Abort();
+        }
+        catch (Exception exception)
+        {
+            DiagnosticReceived?.Invoke(Redact($"Codex transport abort failed: {exception.Message}"));
+        }
+
+        _lifetime.Cancel();
+    }
+
+    private void ThrowIfTransportPoisoned()
+    {
+        if (Volatile.Read(ref _transportPoisoned) != 0)
+        {
+            throw new CodexProtocolException(
+                _terminalFailure ?? "Codex App Server transport is no longer usable.");
         }
     }
 

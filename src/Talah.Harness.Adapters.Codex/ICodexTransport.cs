@@ -9,4 +9,6 @@ internal interface ICodexTransport : IAsyncDisposable
     TextReader Error { get; }
 
     Task Completion { get; }
+
+    void Abort();
 }

@@ -48,7 +48,7 @@ contract, reconnect is best-effort and `CanReplayEvents` is false.
 | Host capability | Advertised | OpenCode 1.18.9 mapping / boundary |
 |---|---:|---|
 | Authenticate | Yes | `/provider/auth`, provider OAuth authorize/callback, `/auth/{providerID}` |
-| API key | Yes | `PUT`/`DELETE /auth/{providerID}`; secrets only in request bodies |
+| API key | Yes | `PUT`/`DELETE /auth/{providerID}`; secrets only in request bodies; custom remote provider endpoints require HTTPS |
 | Provider/model listing | Yes | `GET /provider`; flattened as `provider/model` |
 | List/resume sessions | Yes | `GET /session`, `GET /session/{id}` |
 | Create/update | Yes | `POST /session`; public adapter extension maps `PATCH /session/{id}` |

@@ -25,6 +25,20 @@ internal sealed class CodexProcessTransport : ICodexTransport
 
     public Task Completion => _process.WaitForExitAsync();
 
+    public void Abort()
+    {
+        try
+        {
+            _job.Terminate();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException) when (_process.HasExited)
+        {
+        }
+    }
+
     public static CodexProcessTransport Start(
         string executable,
         IReadOnlyDictionary<string, string> environment)

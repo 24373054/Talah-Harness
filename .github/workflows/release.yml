@@ -12,12 +12,6 @@ jobs:
   signed-release:
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      SIGNING_PFX_BASE64: ${{ secrets.MSIX_SIGNING_PFX_BASE64 }}
-      SIGNING_PASSWORD: ${{ secrets.MSIX_SIGNING_PASSWORD }}
-      SIGNING_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
-      TIMESTAMP_URL: ${{ vars.MSIX_TIMESTAMP_URL }}
-      UPDATE_BASE_URI: ${{ vars.RELEASE_BASE_URI }}
     steps:
       - name: Check out source and pinned submodules
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -33,6 +27,11 @@ jobs:
 
       - name: Validate tag and signing configuration
         shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.MSIX_SIGNING_PFX_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.MSIX_SIGNING_PASSWORD }}
+          SIGNING_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
+          UPDATE_BASE_URI: ${{ vars.RELEASE_BASE_URI }}
         run: |
           $ErrorActionPreference = 'Stop'
           $expected = 'v1.0.0'
@@ -42,21 +41,28 @@ jobs:
           }
           if (-not $env:UPDATE_BASE_URI.StartsWith('https://', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'RELEASE_BASE_URI must use HTTPS.' }
 
-      - name: Materialize signing certificate outside the checkout
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $path = Join-Path $env:RUNNER_TEMP 'talah-harness-release-signing.pfx'
-          [System.IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          "SIGNING_PFX_PATH=$path" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Build, test, sign, and validate release
         shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.MSIX_SIGNING_PFX_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.MSIX_SIGNING_PASSWORD }}
+          SIGNING_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
+          TIMESTAMP_URL: ${{ vars.MSIX_TIMESTAMP_URL }}
+          UPDATE_BASE_URI: ${{ vars.RELEASE_BASE_URI }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $password = ConvertTo-SecureString $env:SIGNING_PASSWORD -AsPlainText -Force
-          $timestamp = if ([string]::IsNullOrWhiteSpace($env:TIMESTAMP_URL)) { 'http://timestamp.digicert.com' } else { $env:TIMESTAMP_URL }
-          ./tools/release/Build-Release.ps1 -Publisher $env:SIGNING_PUBLISHER -CertificatePath $env:SIGNING_PFX_PATH -CertificatePassword $password -TimestampUrl $timestamp -UpdateBaseUri $env:UPDATE_BASE_URI
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'talah-harness-release-signing.pfx'
+          try {
+            [System.IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $password = ConvertTo-SecureString $env:SIGNING_PASSWORD -AsPlainText -Force
+            $timestamp = if ([string]::IsNullOrWhiteSpace($env:TIMESTAMP_URL)) { 'http://timestamp.digicert.com' } else { $env:TIMESTAMP_URL }
+            ./tools/release/Build-Release.ps1 -Publisher $env:SIGNING_PUBLISHER -CertificatePath $certificatePath -CertificatePassword $password -TimestampUrl $timestamp -UpdateBaseUri $env:UPDATE_BASE_URI
+          }
+          finally {
+            if (Test-Path -LiteralPath $certificatePath -PathType Leaf) {
+              Remove-Item -LiteralPath $certificatePath -Force
+            }
+          }
 
       - name: Upload signed release build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

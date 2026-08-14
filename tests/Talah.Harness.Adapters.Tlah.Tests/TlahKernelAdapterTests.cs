@@ -36,6 +36,41 @@ public sealed class TlahKernelAdapterTests
         }
     }
 
+    [Theory]
+    [InlineData("http://provider.example/v1")]
+    [InlineData("https://user:password@provider.example/v1")]
+    [InlineData("ftp://provider.example/v1")]
+    public async Task ApiKey_RejectsUnsafeProviderEndpointsBeforeSecureRuntime(string endpoint)
+    {
+        using var temp = new TemporaryDirectory();
+        var runtime = new FakeNativeRuntime();
+        var (adapter, _) = await AdapterTestFactory.CreateAsync(runtime, temp.Path);
+        await using (adapter)
+        {
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+                adapter.ConfigureApiKeyAsync(new ApiKeyCredential("openai", "must-not-leave", new Uri(endpoint))));
+            Assert.Null(runtime.CapturedSecret);
+            Assert.DoesNotContain("must-not-leave", exception.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("https://provider.example/v1")]
+    [InlineData("http://127.0.0.1:11434/v1")]
+    [InlineData("http://localhost:11434/v1")]
+    public async Task ApiKey_AllowsHttpsAndLoopbackDevelopmentEndpoints(string endpoint)
+    {
+        using var temp = new TemporaryDirectory();
+        var runtime = new FakeNativeRuntime();
+        var (adapter, _) = await AdapterTestFactory.CreateAsync(runtime, temp.Path);
+        await using (adapter)
+        {
+            await adapter.ConfigureApiKeyAsync(
+                new ApiKeyCredential("openai", "accepted-secret", new Uri(endpoint)));
+            Assert.Equal("accepted-secret", runtime.CapturedSecret);
+        }
+    }
+
     [Fact]
     public async Task Sessions_History_Archive_AndPaging_MapNativeRecords()
     {
