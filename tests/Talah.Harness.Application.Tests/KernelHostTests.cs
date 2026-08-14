@@ -59,6 +59,7 @@ public sealed class KernelHostTests
     {
         await using var fixture = new HostFixture();
         await fixture.StartAsync();
+        fixture.Adapter.DeferSessionCreatedEvent = true;
         var workspace = WorkspacePolicy.CreateDescriptor(fixture.Workspace, isTrusted: true);
         var request = new CreateSessionRequest(
             workspace,
@@ -75,11 +76,17 @@ public sealed class KernelHostTests
         Assert.Equal("ask", created.Metadata![SessionSecurityMetadata.ApprovalMode]);
         Assert.Equal("workspace", created.Metadata[SessionSecurityMetadata.SandboxMode]);
 
-        KernelSessionSummary resumed = await fixture.Host.ResumeSessionAsync(created.Session);
+        string projectionMarker = await fixture.Adapter.EmitDeferredSessionCreatedAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(async () => (await fixture.Repository.GetEventsAfterAsync(0, 20, cancellationToken: timeout.Token))
+            .Any(item => item.Event.NativeEventId == projectionMarker), timeout.Token);
+
+        KernelSessionSummary resumed = await fixture.Host.ResumeSessionAsync(created.Session, timeout.Token);
         Assert.Equal("ask", resumed.Metadata![SessionSecurityMetadata.ApprovalMode]);
         Assert.Equal("workspace", resumed.Metadata[SessionSecurityMetadata.SandboxMode]);
-        StoredSession stored = (await fixture.Repository.GetSessionAsync(created.Session))!;
+        StoredSession stored = (await fixture.Repository.GetSessionAsync(created.Session, timeout.Token))!;
         Assert.Equal("ask", stored.Summary.Metadata![SessionSecurityMetadata.ApprovalMode]);
+        Assert.Equal(workspace.WorkspaceId, stored.Summary.Session.WorkspaceId);
 
         await fixture.Host.StartTurnAsync(
             created.Session,
@@ -453,6 +460,7 @@ public sealed class KernelHostTests
         private readonly Channel<KernelEvent> _events = Channel.CreateUnbounded<KernelEvent>();
         private KernelProfile? _profile;
         private int _session;
+        private KernelEvent? _deferredSessionCreatedEvent;
 
         public string AdapterId => "test";
         public int StartTurnCalls { get; private set; }
@@ -461,6 +469,7 @@ public sealed class KernelHostTests
         public PermissionResponse? PermissionResponse { get; private set; }
         public ElicitationResponse? ElicitationResponse { get; private set; }
         public bool FailPermissionResponse { get; set; }
+        public bool DeferSessionCreatedEvent { get; set; }
         public KernelEvent? EventOnDispose { get; set; }
         public KernelItem HistoryItem { get; } = new(
             "item-1", KernelItemKind.AssistantMessage, KernelItemStatus.Completed, "Answer",
@@ -507,8 +516,28 @@ public sealed class KernelHostTests
             var session = new KernelSessionSummary(
                 new SessionRef(AdapterId, _profile!.ProfileId, $"session-{Interlocked.Increment(ref _session)}"),
                 request.Title ?? "session", SessionStatus.Idle, now, now, null);
-            await EmitAsync(MakeEvent(session.Session, 1, KernelEventKind.SessionCreated, new SessionEventData(session)));
+            KernelEvent created = MakeEvent(session.Session, 1, KernelEventKind.SessionCreated, new SessionEventData(session));
+            if (DeferSessionCreatedEvent)
+                _deferredSessionCreatedEvent = created;
+            else
+                await EmitAsync(created);
             return session;
+        }
+
+        public async Task<string> EmitDeferredSessionCreatedAsync()
+        {
+            KernelEvent created = _deferredSessionCreatedEvent
+                ?? throw new InvalidOperationException("No deferred session-created event is available.");
+            _deferredSessionCreatedEvent = null;
+            await EmitAsync(created);
+            string marker = $"projection-after-{created.NativeSessionId}";
+            await EmitAsync(MakeEvent(
+                created.Data is SessionEventData session ? session.Session.Session : throw new InvalidDataException(),
+                created.Sequence + 1,
+                KernelEventKind.Diagnostic,
+                new DiagnosticEventData(new KernelDiagnostic("test.projection-marker", DiagnosticSeverity.Information, "projection complete")),
+                nativeEventId: marker));
+            return marker;
         }
 
         public Task<KernelSessionSummary> ResumeSessionAsync(SessionRef session, CancellationToken cancellationToken = default) =>

@@ -26,14 +26,47 @@ public sealed class CanonicalRepository(HarnessDatabase database)
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HarnessDatabase _database = database ?? throw new ArgumentNullException(nameof(database));
 
-    public async Task<long> UpsertSessionAsync(KernelSessionSummary summary, CancellationToken cancellationToken = default)
+    public Task<long> UpsertSessionAsync(KernelSessionSummary summary, CancellationToken cancellationToken = default) =>
+        UpsertSessionCoreAsync(summary, preserveHostOwnedState: false, cancellationToken);
+
+    public Task<long> UpsertProjectedSessionAsync(KernelSessionSummary summary, CancellationToken cancellationToken = default) =>
+        UpsertSessionCoreAsync(RemoveHostOwnedMetadata(summary), preserveHostOwnedState: true, cancellationToken);
+
+    private async Task<long> UpsertSessionCoreAsync(
+        KernelSessionSummary summary,
+        bool preserveHostOwnedState,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(summary);
         await using SqliteConnection connection = await _database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using System.Data.Common.DbTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await using SqliteCommand command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText = """
+        command.CommandText = preserveHostOwnedState ? """
+            INSERT INTO sessions(adapter_id, profile_id, native_session_id, parent_native_session_id, workspace_id,
+                                 title, status, created_at, updated_at, preview, metadata_json)
+            VALUES ($adapter, $profile, $native, $parent, $workspace, $title, $status, $created, $updated, $preview, $metadata)
+            ON CONFLICT(adapter_id, profile_id, native_session_id) DO UPDATE SET
+                parent_native_session_id=excluded.parent_native_session_id,
+                workspace_id=COALESCE(sessions.workspace_id, excluded.workspace_id),
+                title=excluded.title,
+                status=excluded.status,
+                updated_at=excluded.updated_at,
+                preview=excluded.preview,
+                metadata_json=(
+                    SELECT NULLIF(json_group_object(key, value), '{}')
+                    FROM (
+                        SELECT incoming.key, incoming.value
+                        FROM json_each(COALESCE(excluded.metadata_json, '{}')) AS incoming
+                        WHERE lower(substr(incoming.key, 1, 5)) <> 'host.'
+                        UNION ALL
+                        SELECT existing.key, existing.value
+                        FROM json_each(COALESCE(sessions.metadata_json, '{}')) AS existing
+                        WHERE lower(substr(existing.key, 1, 5)) = 'host.'
+                    )
+                )
+            RETURNING session_id;
+            """ : """
             INSERT INTO sessions(adapter_id, profile_id, native_session_id, parent_native_session_id, workspace_id,
                                  title, status, created_at, updated_at, preview, metadata_json)
             VALUES ($adapter, $profile, $native, $parent, $workspace, $title, $status, $created, $updated, $preview, $metadata)
@@ -61,6 +94,17 @@ public sealed class CanonicalRepository(HarnessDatabase database)
         long id = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return id;
+    }
+
+    private static KernelSessionSummary RemoveHostOwnedMetadata(KernelSessionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        if (summary.Metadata is null)
+            return summary;
+        Dictionary<string, string> adapterMetadata = summary.Metadata
+            .Where(item => !item.Key.StartsWith("host.", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        return summary with { Metadata = adapterMetadata.Count == 0 ? null : adapterMetadata };
     }
 
     public async Task<ResultPage<StoredSession>> ListSessionsAsync(PageRequest page, CancellationToken cancellationToken = default)

@@ -41,6 +41,10 @@ catch { Add-Failure "Unable to parse the app project: $($_.Exception.Message)" }
 
 $solutionPath = Join-Path $RepositoryRoot 'Talah.Harness.sln'
 $solutionContent = Get-Content -LiteralPath $solutionPath -Raw
+$releaseDriver = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'tools\release\Build-Release.ps1') -Raw
+if ($releaseDriver -notmatch "(?m)ArgumentList\s+@\('restore'.*'--maxcpucount:1'") {
+    Add-Failure 'Release restore is not bounded to a single MSBuild node.'
+}
 foreach ($testProject in Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot 'tests') -Recurse -Filter '*.Tests.csproj') {
     $relativeTestProject = $testProject.FullName.Substring($RepositoryRoot.Length).TrimStart('\', '/').Replace('/', '\')
     if (-not $solutionContent.Contains('"' + $relativeTestProject + '"', [StringComparison]::OrdinalIgnoreCase)) {

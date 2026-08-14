@@ -224,6 +224,47 @@ public sealed class PersistenceTests
     }
 
     [Fact]
+    public async Task AdapterEventProjectionCannotOverwriteHostOwnedSessionState()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = CreateDatabase(temp);
+        await database.InitializeAsync();
+        var repository = new CanonicalRepository(database);
+        var now = DateTimeOffset.UtcNow;
+        KernelSessionSummary host = Session("projected", now) with
+        {
+            Session = Session("projected", now).Session with { WorkspaceId = "ws_host" },
+            Metadata = new Dictionary<string, string>
+            {
+                [SessionSecurityMetadata.ApprovalMode] = "on-request",
+                [SessionSecurityMetadata.SandboxMode] = "workspace-write",
+                ["native.stale"] = "old"
+            }
+        };
+        await repository.UpsertSessionAsync(host);
+
+        KernelSessionSummary adapterEvent = Session("projected", now.AddMinutes(1)) with
+        {
+            Session = Session("projected", now).Session with { WorkspaceId = "ws_adapter" },
+            Metadata = new Dictionary<string, string>
+            {
+                [SessionSecurityMetadata.ApprovalMode] = "never",
+                ["host.spoofed"] = "true",
+                ["native.current"] = "new"
+            }
+        };
+        await repository.UpsertProjectedSessionAsync(adapterEvent);
+
+        KernelSessionSummary stored = (await repository.GetSessionAsync(host.Session))!.Summary;
+        Assert.Equal("ws_host", stored.Session.WorkspaceId);
+        Assert.Equal("on-request", stored.Metadata![SessionSecurityMetadata.ApprovalMode]);
+        Assert.Equal("workspace-write", stored.Metadata[SessionSecurityMetadata.SandboxMode]);
+        Assert.Equal("new", stored.Metadata["native.current"]);
+        Assert.DoesNotContain("native.stale", stored.Metadata.Keys);
+        Assert.DoesNotContain("host.spoofed", stored.Metadata.Keys);
+    }
+
+    [Fact]
     public async Task ResolvedApprovalCannotBeReopenedByEventProjectionReplay()
     {
         using var temp = new TemporaryDirectory();

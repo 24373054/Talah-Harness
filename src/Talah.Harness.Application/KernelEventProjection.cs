@@ -27,7 +27,7 @@ internal sealed class KernelEventProjection(CanonicalRepository repository)
         switch (kernelEvent.Data)
         {
             case SessionEventData session:
-                await _repository.UpsertSessionAsync(session.Session, cancellationToken).ConfigureAwait(false);
+                await _repository.UpsertProjectedSessionAsync(session.Session, cancellationToken).ConfigureAwait(false);
                 break;
             case ItemEventData item when kernelEvent.NativeSessionId is not null:
                 {

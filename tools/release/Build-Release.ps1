@@ -27,7 +27,7 @@ New-Item -ItemType Directory -Path $metadataDirectory -Force | Out-Null
 & (Join-Path $PSScriptRoot 'Test-ReleaseConfiguration.ps1') -RepositoryRoot $repositoryRoot
 
 Write-Host 'Restoring pinned .NET SDK solution inputs...'
-Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('restore', $solution, '--force-evaluate', '--disable-build-servers', '-p:RuntimeIdentifier=win-x64') -FailureMessage 'dotnet restore failed.'
+Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('restore', $solution, '--force-evaluate', '--disable-build-servers', '--maxcpucount:1', '-p:UseSharedCompilation=false', '-p:RuntimeIdentifier=win-x64') -FailureMessage 'dotnet restore failed.'
 
 Write-Host 'Building Release/x64 with warnings as errors...'
 Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList @('build', $solution, '--configuration', $Configuration, '--no-restore', '--disable-build-servers', '--maxcpucount:1', '-p:UseSharedCompilation=false', '-p:TreatWarningsAsErrors=true', '-p:ContinuousIntegrationBuild=true') -FailureMessage 'dotnet build failed.'
