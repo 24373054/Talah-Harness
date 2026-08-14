@@ -55,6 +55,56 @@ public sealed class KernelHostTests
     }
 
     [Fact]
+    public async Task SecurityPolicyIsCanonicalizedPersistedAndPreservedAcrossNativeResume()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        var workspace = WorkspacePolicy.CreateDescriptor(fixture.Workspace, isTrusted: true);
+        var request = new CreateSessionRequest(
+            workspace,
+            "policy session",
+            null,
+            null,
+            new Dictionary<string, string>
+            {
+                ["approvalMode"] = "ASK",
+                ["sandboxMode"] = "WORKSPACE"
+            });
+
+        KernelSessionSummary created = await fixture.Host.CreateSessionAsync(fixture.Key, request);
+        Assert.Equal("ask", created.Metadata![SessionSecurityMetadata.ApprovalMode]);
+        Assert.Equal("workspace", created.Metadata[SessionSecurityMetadata.SandboxMode]);
+
+        KernelSessionSummary resumed = await fixture.Host.ResumeSessionAsync(created.Session);
+        Assert.Equal("ask", resumed.Metadata![SessionSecurityMetadata.ApprovalMode]);
+        Assert.Equal("workspace", resumed.Metadata[SessionSecurityMetadata.SandboxMode]);
+        StoredSession stored = (await fixture.Repository.GetSessionAsync(created.Session))!;
+        Assert.Equal("ask", stored.Summary.Metadata![SessionSecurityMetadata.ApprovalMode]);
+
+        await fixture.Host.StartTurnAsync(
+            created.Session,
+            new TurnInput([new TextContentBlock("run")]),
+            new TurnOptions(null, "ASK", "WORKSPACE", null));
+        Assert.Equal("ask", fixture.Adapter.LastTurnOptions!.ApprovalMode);
+        Assert.Equal("workspace", fixture.Adapter.LastTurnOptions.SandboxMode);
+    }
+
+    [Fact]
+    public async Task UnsupportedSecurityPolicyIsRejectedBeforeAdapterCall()
+    {
+        await using var fixture = new HostFixture();
+        await fixture.StartAsync();
+        KernelSessionSummary session = await fixture.CreateSessionAsync();
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Host.StartTurnAsync(
+            session.Session,
+            new TurnInput([new TextContentBlock("run")]),
+            new TurnOptions(null, "unsupported", null, null)));
+
+        Assert.Equal(0, fixture.Adapter.StartTurnCalls);
+    }
+
+    [Fact]
     public async Task TurnRejectsReferencedPathOutsideDurableWorkspaceBeforeAdapterCall()
     {
         await using var fixture = new HostFixture();
@@ -406,6 +456,7 @@ public sealed class KernelHostTests
 
         public string AdapterId => "test";
         public int StartTurnCalls { get; private set; }
+        public TurnOptions? LastTurnOptions { get; private set; }
         public bool Archived { get; private set; }
         public PermissionResponse? PermissionResponse { get; private set; }
         public ElicitationResponse? ElicitationResponse { get; private set; }
@@ -417,7 +468,18 @@ public sealed class KernelHostTests
         public KernelDescriptor Descriptor => new(
             AdapterId, "Test kernel", "test", "1.0.0", "1", KernelAvailability.Ready,
             new KernelCapabilities(true, true, true, true, true, true, true, true, true, false, true, true, false, false, false, false),
-            new SecurityDescriptor(SecurityEnforcementKind.PermissionGate, "test", [], false, false, true, "test"));
+            new SecurityDescriptor(
+                SecurityEnforcementKind.PermissionGate,
+                "test",
+                [],
+                false,
+                false,
+                true,
+                "test",
+                [new KernelSecurityPolicyOption("ask", "Ask", "test approval")],
+                [new KernelSecurityPolicyOption("workspace", "Workspace", "test sandbox")],
+                "ask",
+                "workspace"));
 
         public ValueTask InitializeAsync(KernelInitializationContext context, CancellationToken cancellationToken = default)
         {
@@ -462,6 +524,7 @@ public sealed class KernelHostTests
         public Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
         {
             StartTurnCalls++;
+            LastTurnOptions = options;
             return Task.FromResult(new KernelTurn(session, "turn-1", TurnStatus.Running, DateTimeOffset.UtcNow));
         }
 

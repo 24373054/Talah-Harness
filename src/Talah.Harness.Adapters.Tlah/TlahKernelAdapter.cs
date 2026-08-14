@@ -62,7 +62,17 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
             NetworkRestricted: true,
             ProcessRestricted: true,
             IsVerifiedByHost: false,
-            "TLAH validates tool effects and gates sensitive actions. This is not an OS sandbox; provider traffic and allowlisted tool traffic can leave the machine."),
+            "TLAH validates tool effects and gates sensitive actions. This is not an OS sandbox; provider traffic and allowlisted tool traffic can leave the machine.",
+            ApprovalPolicies:
+            [
+                new(AgentPermissionModes.RequestApproval, "Ask approval", "TLAH asks before tools that require an explicit decision."),
+                new(AgentPermissionModes.Plan, "Plan mode", "Safe reads proceed; write or destructive tools require an explicit decision."),
+                new(AgentPermissionModes.AutoApprove, "Auto approve", "TLAH automatically allows ordinary tools while retaining immutable safety blocks.", IsDangerous: true),
+                new(AgentPermissionModes.BypassPermissions, "Danger: full access", "TLAH bypasses ordinary permission, path, network, and policy guards; immutable safety blocks remain.", IsDangerous: true)
+            ],
+            SandboxPolicies: null,
+            DefaultApprovalPolicy: AgentPermissionModes.RequestApproval,
+            DefaultSandboxPolicy: null),
         new Dictionary<string, string>
         {
             ["upstream"] = "TLAH-Studio",
@@ -234,6 +244,7 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
     public async Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _ = NormalizePermissionMode(options);
         Guid chatId = ValidateSession(session);
         string prompt = FlattenInput(input);
         if (string.IsNullOrWhiteSpace(prompt))
@@ -398,12 +409,30 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         }
     }
 
-    private static AgentRunOptions BuildOptions(TurnOptions options, IProgress<LlmStreamUpdate> output, IProgress<AgentProgressUpdate> progress) =>
-        new(
-            AutoApproveTools: string.Equals(options.ApprovalMode, "auto", StringComparison.OrdinalIgnoreCase),
+    private static AgentRunOptions BuildOptions(TurnOptions options, IProgress<LlmStreamUpdate> output, IProgress<AgentProgressUpdate> progress)
+    {
+        string permissionMode = NormalizePermissionMode(options);
+        return new AgentRunOptions(
+            AutoApproveTools: permissionMode is AgentPermissionModes.AutoApprove or AgentPermissionModes.BypassPermissions,
             OutputStream: output,
             Progress: progress,
-            PermissionMode: string.IsNullOrWhiteSpace(options.ApprovalMode) ? AgentPermissionModes.RequestApproval : options.ApprovalMode);
+            PermissionMode: permissionMode);
+    }
+
+    private static string NormalizePermissionMode(TurnOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.SandboxMode))
+            throw new NotSupportedException("Native TLAH exposes a tool-authorization policy, not a selectable OS sandbox.");
+        return options.ApprovalMode?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => AgentPermissionModes.RequestApproval,
+            AgentPermissionModes.RequestApproval => AgentPermissionModes.RequestApproval,
+            AgentPermissionModes.Plan => AgentPermissionModes.Plan,
+            AgentPermissionModes.AutoApprove => AgentPermissionModes.AutoApprove,
+            AgentPermissionModes.BypassPermissions => AgentPermissionModes.BypassPermissions,
+            _ => throw new NotSupportedException($"Native TLAH permission mode '{options.ApprovalMode}' is not supported.")
+        };
+    }
 
     private void HandleProgress(ActiveTurn active, AgentProgressUpdate update)
     {

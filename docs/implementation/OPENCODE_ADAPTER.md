@@ -63,6 +63,11 @@ contract, reconnect is best-effort and `CanReplayEvents` is false.
 | Permission gate | Yes | `permission.v2.asked` and `/permission/{requestID}/reply` |
 | Amend tool input | **No** | reply schema accepts only once/always/reject; throws clearly |
 | Questions/elicitation | Yes | question asked/reply/reject |
+
+OpenCode 1.18.9 does not expose a per-turn approval-mode or OS-sandbox field on
+`prompt_async`. Its descriptor therefore advertises no selectable policy values,
+the desktop hides both controls, and the adapter rejects non-null cross-kernel
+policy strings before sending a prompt instead of silently ignoring them.
 | MCP configuration | **No** | status is reported as metadata; no host-v1 configuration method is claimed |
 | Agents/subagents | Yes | create/prompt agent selection and normalized subtask/agent events |
 | Event replay | **No** | reconnect/dedup exists, but the server does not promise replay |

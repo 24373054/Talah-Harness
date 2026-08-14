@@ -152,7 +152,12 @@ is recognized by upstream `ProtectedSecret` as DPAPI-protected.
   Resume performs the get/validation behavior; native rename remains available
   internally but cannot be surfaced through `IKernelAdapter`.
 - The contract has no generic provider-settings operation beyond API-key
-  configuration. A custom base URI can be supplied through `ApiKeyCredential`.
+  configuration. A custom base URI can be supplied through `ApiKeyCredential`;
+  remote endpoints require HTTPS, HTTP is restricted to loopback development
+  providers, and embedded URI credentials are rejected.
+- TLAH advertises and accepts only its native `request_approval`, `plan`,
+  `auto_approve`, and `bypass_permissions` modes. It does not advertise an OS
+  sandbox selector. Cross-kernel Codex policy strings fail before a native run.
 - MCP configuration is not surfaced, although the native agent graph can use
   profile database MCP records created by TLAH itself; the capability is false.
 - Ask-user elicitation cannot be resumed through a stable upstream response API;

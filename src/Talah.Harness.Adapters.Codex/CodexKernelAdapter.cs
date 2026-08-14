@@ -68,7 +68,21 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
             NetworkRestricted: false,
             ProcessRestricted: false,
             IsVerifiedByHost: false,
-            "Codex enforces the selected sandbox and approval policy; the host displays and correlates approvals."),
+            "Codex enforces the selected sandbox and approval policy; the host displays and correlates approvals.",
+            ApprovalPolicies:
+            [
+                new("on-request", "Ask on request", "Codex asks when its policy determines user approval is needed."),
+                new("untrusted", "Ask for untrusted actions", "Codex requests approval for actions it classifies as untrusted."),
+                new("never", "Never request approval", "Codex will not ask for escalation; operations outside the active sandbox policy cannot be approved.")
+            ],
+            SandboxPolicies:
+            [
+                new("workspace-write", "Workspace write", "Codex may write within the selected workspace under its native sandbox."),
+                new("read-only", "Read only", "Codex receives its native read-only sandbox policy."),
+                new("danger-full-access", "Danger: full access", "Codex receives its native unrestricted sandbox policy.", IsDangerous: true)
+            ],
+            DefaultApprovalPolicy: "on-request",
+            DefaultSandboxPolicy: "workspace-write"),
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["schemaVersion"] = "0.147.0",

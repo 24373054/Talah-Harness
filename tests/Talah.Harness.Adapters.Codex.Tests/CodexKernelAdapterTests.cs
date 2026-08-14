@@ -37,6 +37,10 @@ public sealed class CodexKernelAdapterTests
         Assert.Contains(calls, call => call.Method == "account/login/cancel");
         Assert.Contains(calls, call => call.Method == "account/logout");
         Assert.False(adapter.Descriptor.Capabilities.CanConfigureProviders);
+        Assert.Equal(["on-request", "untrusted", "never"],
+            adapter.Descriptor.Security.ApprovalPolicies!.Select(option => option.Value));
+        Assert.Equal(["workspace-write", "read-only", "danger-full-access"],
+            adapter.Descriptor.Security.SandboxPolicies!.Select(option => option.Value));
     }
 
     [Fact]
@@ -91,9 +95,11 @@ public sealed class CodexKernelAdapterTests
     public async Task TurnStartSteerInterruptAndStreamAreNormalizedWithVendorData()
     {
         var calls = new List<string>();
-        var fixture = await TestSupport.CreateInitializedAdapterAsync((method, _) =>
+        JsonElement? startParameters = null;
+        var fixture = await TestSupport.CreateInitializedAdapterAsync((method, parameters) =>
         {
             calls.Add(method);
+            if (method == "turn/start") startParameters = parameters.Clone();
             return method switch
             {
                 "turn/start" => new { turn = new { id = "turn-1", status = "inProgress", items = Array.Empty<object>(), startedAt = 1_700_000_000_000L } },
@@ -125,6 +131,8 @@ public sealed class CodexKernelAdapterTests
         Assert.Equal("Hi", Assert.IsType<ContentDeltaEventData>(delta.Data).Delta);
         Assert.Equal(KernelEventKind.TurnCompleted, completed.Kind);
         Assert.NotNull(delta.VendorData);
+        Assert.Equal("on-request", startParameters?.GetProperty("approvalPolicy").GetString());
+        Assert.Equal("workspaceWrite", startParameters?.GetProperty("sandboxPolicy").GetProperty("type").GetString());
         Assert.Contains("turn/steer", calls);
         Assert.Contains("turn/interrupt", calls);
     }

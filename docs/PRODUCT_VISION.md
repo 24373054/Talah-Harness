@@ -29,4 +29,5 @@ recover, and audit a coding-agent session from one durable workspace.
 - Claiming equivalent sandbox guarantees for engines with different enforcement.
 - Cloud account synchronization owned by Talah Harness.
 - A web or cross-platform client.
-
+- Multiple same-kernel account/profile slots. Version 1.0 has one isolated,
+  configurable profile for each shipping kernel.

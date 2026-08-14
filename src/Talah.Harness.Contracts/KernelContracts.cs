@@ -52,7 +52,17 @@ public sealed record SecurityDescriptor(
     bool NetworkRestricted,
     bool ProcessRestricted,
     bool IsVerifiedByHost,
-    string HumanReadableSummary);
+    string HumanReadableSummary,
+    IReadOnlyList<KernelSecurityPolicyOption>? ApprovalPolicies = null,
+    IReadOnlyList<KernelSecurityPolicyOption>? SandboxPolicies = null,
+    string? DefaultApprovalPolicy = null,
+    string? DefaultSandboxPolicy = null);
+
+public sealed record KernelSecurityPolicyOption(
+    string Value,
+    string DisplayName,
+    string Description,
+    bool IsDangerous = false);
 
 public sealed record KernelDescriptor(
     string AdapterId,

@@ -18,6 +18,11 @@ public sealed class TlahKernelAdapterTests
         Assert.False(descriptor.Capabilities.CanReturnDiffs);
         Assert.Equal(SecurityEnforcementKind.PermissionGate, descriptor.Security.EnforcementKind);
         Assert.False(descriptor.Security.IsVerifiedByHost);
+        Assert.Equal(
+            ["request_approval", "plan", "auto_approve", "bypass_permissions"],
+            descriptor.Security.ApprovalPolicies!.Select(option => option.Value));
+        Assert.Null(descriptor.Security.SandboxPolicies);
+        Assert.Equal("request_approval", descriptor.Security.DefaultApprovalPolicy);
     }
 
     [Fact]
@@ -129,6 +134,47 @@ public sealed class TlahKernelAdapterTests
             await adapter.RespondToPermissionAsync(new PermissionResponse(permission.PermissionId, "allow-once"));
             _ = await WaitForEventAsync(adapter, KernelEventKind.TurnCompleted);
             Assert.True(runtime.ApprovalSet);
+        }
+    }
+
+    [Theory]
+    [InlineData("request_approval", false)]
+    [InlineData("plan", false)]
+    [InlineData("auto_approve", true)]
+    [InlineData("bypass_permissions", true)]
+    public async Task NativePermissionPolicyMapsExactlyToTlahRuntime(string mode, bool autoApprove)
+    {
+        using var temp = new TemporaryDirectory();
+        var runtime = new FakeNativeRuntime();
+        var (adapter, session) = await AdapterTestFactory.CreateAsync(runtime, temp.Path);
+        await using (adapter)
+        {
+            _ = await adapter.StartTurnAsync(
+                session,
+                new TurnInput([new TextContentBlock("policy")]),
+                new TurnOptions(null, mode, null, null));
+            _ = await WaitForEventAsync(adapter, KernelEventKind.TurnCompleted);
+
+            Assert.Equal(mode, runtime.CapturedRunOptions!.PermissionMode);
+            Assert.Equal(autoApprove, runtime.CapturedRunOptions.AutoApproveTools);
+        }
+    }
+
+    [Theory]
+    [InlineData("on-request", null)]
+    [InlineData("request_approval", "workspace-write")]
+    public async Task UnsupportedCrossKernelPolicyIsRejectedBeforeNativeRun(string approvalMode, string? sandboxMode)
+    {
+        using var temp = new TemporaryDirectory();
+        var runtime = new FakeNativeRuntime();
+        var (adapter, session) = await AdapterTestFactory.CreateAsync(runtime, temp.Path);
+        await using (adapter)
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() => adapter.StartTurnAsync(
+                session,
+                new TurnInput([new TextContentBlock("policy")]),
+                new TurnOptions(null, approvalMode, sandboxMode, null)));
+            Assert.Equal(0, runtime.RunCallCount);
         }
     }
 

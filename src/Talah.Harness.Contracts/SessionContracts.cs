@@ -1,5 +1,11 @@
 namespace Talah.Harness.Contracts;
 
+public static class SessionSecurityMetadata
+{
+    public const string ApprovalMode = "host.security.approvalMode";
+    public const string SandboxMode = "host.security.sandboxMode";
+}
+
 public sealed record WorkspaceDescriptor(
     string WorkspaceId,
     string RootPath,

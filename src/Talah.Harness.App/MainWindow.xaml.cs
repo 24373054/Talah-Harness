@@ -30,8 +30,8 @@ public sealed partial class MainWindow : Window
     private bool _isClosing;
     private bool _shutdownComplete;
     private string _sessionFilter = string.Empty;
-    private string _approvalMode = "on-request";
-    private string _sandboxMode = "workspace-write";
+    private readonly Dictionary<string, string> _newSessionApprovalModes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _newSessionSandboxModes = new(StringComparer.Ordinal);
 
     public ObservableCollection<KernelDisplayState> Kernels { get; } =
     [
@@ -318,28 +318,79 @@ public sealed partial class MainWindow : Window
         kernelBox.SelectedItem = available.FirstOrDefault(profile => profile.Profile.AdapterId == _controller.Settings.SelectedAdapterId) ?? available[0];
         var titleBox = new TextBox { Header = "Title", PlaceholderText = "Optional session title" };
         var modelText = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["SecondaryTextBrush"] };
-        void UpdateModelText() => modelText.Text = kernelBox.SelectedItem is ProfileRuntimeState profile
-            ? $"Model: {_controller.GetSelectedModel(profile.Profile.AdapterId) ?? "kernel default"}. Change this in kernel setup."
-            : "Model: kernel default";
-        kernelBox.SelectionChanged += (_, _) => UpdateModelText();
-        UpdateModelText();
-        var approvalBox = new ComboBox { Header = "Approval policy", ItemsSource = new[] { "on-request", "untrusted", "never" }, SelectedItem = _approvalMode };
-        var sandboxBox = new ComboBox { Header = "Sandbox", ItemsSource = new[] { "workspace-write", "read-only", "danger-full-access" }, SelectedItem = _sandboxMode };
+        var approvalBox = new ComboBox { Header = "Approval policy", DisplayMemberPath = nameof(KernelSecurityPolicyOption.DisplayName) };
+        var sandboxBox = new ComboBox { Header = "Sandbox policy", DisplayMemberPath = nameof(KernelSecurityPolicyOption.DisplayName) };
+        var securityText = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["SecondaryTextBrush"]
+        };
+        void UpdateKernelDetails()
+        {
+            if (kernelBox.SelectedItem is not ProfileRuntimeState profile) return;
+            string adapterId = profile.Profile.AdapterId;
+            modelText.Text = $"Model: {_controller.GetSelectedModel(adapterId) ?? "kernel default"}. Change this in kernel setup.";
+            SecurityDescriptor security = _controller.GetDescriptor(adapterId)?.Security
+                ?? throw new InvalidOperationException("The selected kernel has no security descriptor.");
+            IReadOnlyList<KernelSecurityPolicyOption> approvals = security.ApprovalPolicies ?? [];
+            IReadOnlyList<KernelSecurityPolicyOption> sandboxes = security.SandboxPolicies ?? [];
+            approvalBox.ItemsSource = approvals;
+            sandboxBox.ItemsSource = sandboxes;
+            string? rememberedApproval = _newSessionApprovalModes.GetValueOrDefault(adapterId) ?? security.DefaultApprovalPolicy;
+            string? rememberedSandbox = _newSessionSandboxModes.GetValueOrDefault(adapterId) ?? security.DefaultSandboxPolicy;
+            approvalBox.SelectedItem = approvals.FirstOrDefault(option => option.Value == rememberedApproval) ?? approvals.FirstOrDefault();
+            sandboxBox.SelectedItem = sandboxes.FirstOrDefault(option => option.Value == rememberedSandbox) ?? sandboxes.FirstOrDefault();
+            approvalBox.Visibility = approvals.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            sandboxBox.Visibility = sandboxes.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            string approvalBoundary = approvals.Count == 0
+                ? "Approval policy: kernel-managed; no per-turn override."
+                : "Approval policy: enforced by the selected kernel.";
+            string sandboxBoundary = sandboxes.Count == 0
+                ? "Sandbox: this kernel exposes no selectable OS-sandbox policy."
+                : "Sandbox: enforced by the selected kernel, not by the Harness host.";
+            securityText.Text = $"{security.HumanReadableSummary}{Environment.NewLine}{approvalBoundary} {sandboxBoundary}";
+        }
+        kernelBox.SelectionChanged += (_, _) => UpdateKernelDetails();
+        UpdateKernelDetails();
         var trustedBox = new CheckBox { Content = "Trust this workspace for the selected kernel", IsChecked = _controller.Workspace.IsTrusted };
-        var content = new StackPanel { Spacing = 10, Children = { kernelBox, titleBox, modelText, approvalBox, sandboxBox, trustedBox } };
+        var content = new StackPanel { Spacing = 10, Children = { kernelBox, titleBox, modelText, approvalBox, sandboxBox, securityText, trustedBox } };
         var dialog = CreateDialog("Create session", content, "Create", "Cancel");
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
 
+        ProfileRuntimeState selectedProfile = (ProfileRuntimeState)kernelBox.SelectedItem;
+        var approvalChoice = approvalBox.SelectedItem as KernelSecurityPolicyOption;
+        var sandboxChoice = sandboxBox.SelectedItem as KernelSecurityPolicyOption;
+        if (approvalChoice?.IsDangerous == true || sandboxChoice?.IsDangerous == true)
+        {
+            string elevated = string.Join(", ", new[] { approvalChoice, sandboxChoice }
+                .Where(choice => choice?.IsDangerous == true)
+                .Select(choice => choice!.DisplayName));
+            var warning = CreateDialog(
+                "Confirm elevated kernel policy",
+                new TextBlock
+                {
+                    Text = $"{elevated} weakens the selected kernel's normal safety boundary. The Harness cannot add an equivalent sandbox. Continue only for a workspace you fully trust.",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                "Use elevated policy",
+                "Go back");
+            if (await warning.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+
         await RunOperationAsync(async () =>
         {
-            ProfileRuntimeState profile = (ProfileRuntimeState)kernelBox.SelectedItem;
-            _approvalMode = approvalBox.SelectedItem?.ToString() ?? "on-request";
-            _sandboxMode = sandboxBox.SelectedItem?.ToString() ?? "workspace-write";
+            string adapterId = selectedProfile.Profile.AdapterId;
+            string? approvalMode = approvalChoice?.Value;
+            string? sandboxMode = sandboxChoice?.Value;
+            if (approvalMode is null) _newSessionApprovalModes.Remove(adapterId);
+            else _newSessionApprovalModes[adapterId] = approvalMode;
+            if (sandboxMode is null) _newSessionSandboxModes.Remove(adapterId);
+            else _newSessionSandboxModes[adapterId] = sandboxMode;
             if (_controller.Workspace!.IsTrusted != (trustedBox.IsChecked == true))
                 await _controller.SetWorkspaceAsync(_controller.Workspace.RootPath, trustedBox.IsChecked == true);
-            await _controller.SelectAdapterAsync(profile.Profile.AdapterId);
-            KernelSessionSummary created = await _controller.CreateSessionAsync(profile.Profile.AdapterId, titleBox.Text,
-                _controller.GetSelectedModel(profile.Profile.AdapterId), _approvalMode, _sandboxMode);
+            await _controller.SelectAdapterAsync(adapterId);
+            KernelSessionSummary created = await _controller.CreateSessionAsync(adapterId, titleBox.Text,
+                _controller.GetSelectedModel(adapterId), approvalMode, sandboxMode);
             await RefreshSessionsAsync();
             SessionList.SelectedItem = Sessions.FirstOrDefault(item => SameSession(item.Summary.Session, created.Session));
         }, "Create session");
@@ -447,10 +498,13 @@ public sealed partial class MainWindow : Window
             }
             else
             {
+                KernelDescriptor descriptor = _controller.GetDescriptor(_selectedSession.Summary.Session.AdapterId)
+                    ?? throw new InvalidOperationException("The selected session's kernel descriptor is unavailable.");
+                (string? approvalMode, string? sandboxMode) = EffectiveSecurityPolicy(_selectedSession.Summary, descriptor.Security);
                 TraceItems.Add(new TraceDisplayState($"local-{Guid.NewGuid():N}", "PROMPT", "User instruction", prompt,
                     DateTimeOffset.UtcNow, "\uE8BD", ShellBrushes.ForAdapter(_selectedSession.Summary.Session.AdapterId), false));
                 KernelTurn turn = await _controller.StartTurnAsync(_selectedSession.Summary.Session, prompt, paths,
-                    _controller.GetSelectedModel(_selectedSession.Summary.Session.AdapterId), _approvalMode, _sandboxMode);
+                    _controller.GetSelectedModel(_selectedSession.Summary.Session.AdapterId), approvalMode, sandboxMode);
                 _activeTurnId = turn.NativeTurnId;
             }
             PromptTextBox.Text = string.Empty;
@@ -552,12 +606,40 @@ public sealed partial class MainWindow : Window
         if (descriptor is not null)
         {
             SecurityDescriptor security = descriptor.Security;
+            (string? approvalMode, string? sandboxMode) = EffectiveSecurityPolicy(session.Summary, security);
             SecurityInfoBar.Title = $"{security.EnforcementKind} · {security.EnforcementOwner}";
-            SecurityInfoBar.Message = $"{security.HumanReadableSummary} Writable roots: {(security.WritableRoots.Count == 0 ? "none reported" : string.Join(", ", security.WritableRoots))}. Network restricted: {security.NetworkRestricted}. Process restricted: {security.ProcessRestricted}. Host verified: {security.IsVerifiedByHost}.";
+            SecurityInfoBar.Message = $"{security.HumanReadableSummary} Effective approval: {PolicyDisplayName(security.ApprovalPolicies, approvalMode, "kernel-managed")}. Effective sandbox: {PolicyDisplayName(security.SandboxPolicies, sandboxMode, "not exposed")}. Writable roots: {(security.WritableRoots.Count == 0 ? "none reported" : string.Join(", ", security.WritableRoots))}. Network restricted: {security.NetworkRestricted}. Process restricted: {security.ProcessRestricted}. Host verified: {security.IsVerifiedByHost}.";
             CapabilityList.ItemsSource = CapabilityLabels(descriptor.Capabilities);
         }
         RefreshDiffButton.IsEnabled = descriptor?.Capabilities.CanReturnDiffs == true;
     }
+
+    private static (string? ApprovalMode, string? SandboxMode) EffectiveSecurityPolicy(
+        KernelSessionSummary session,
+        SecurityDescriptor security) =>
+        (
+            EffectiveSecurityOption(session.Metadata, SessionSecurityMetadata.ApprovalMode, security.ApprovalPolicies, security.DefaultApprovalPolicy),
+            EffectiveSecurityOption(session.Metadata, SessionSecurityMetadata.SandboxMode, security.SandboxPolicies, security.DefaultSandboxPolicy)
+        );
+
+    private static string? EffectiveSecurityOption(
+        IReadOnlyDictionary<string, string>? metadata,
+        string metadataKey,
+        IReadOnlyList<KernelSecurityPolicyOption>? supported,
+        string? defaultValue)
+    {
+        if (supported is null || supported.Count == 0) return null;
+        string? requested = metadata?.GetValueOrDefault(metadataKey) ?? defaultValue;
+        return supported.FirstOrDefault(option => string.Equals(option.Value, requested, StringComparison.OrdinalIgnoreCase))?.Value
+            ?? supported.FirstOrDefault(option => string.Equals(option.Value, defaultValue, StringComparison.OrdinalIgnoreCase))?.Value;
+    }
+
+    private static string PolicyDisplayName(
+        IReadOnlyList<KernelSecurityPolicyOption>? supported,
+        string? value,
+        string fallback) =>
+        supported?.FirstOrDefault(option => string.Equals(option.Value, value, StringComparison.OrdinalIgnoreCase))?.DisplayName
+        ?? fallback;
 
     private static IReadOnlyList<string> CapabilityLabels(KernelCapabilities capabilities)
     {

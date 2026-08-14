@@ -110,6 +110,13 @@ No provider secret is inferred from the process environment or copied into a
 profile. Runtime executable overrides remain adapter-level deployment options;
 the normal desktop defaults use adapter discovery.
 
+Profile cardinality in 1.0 is deliberate: the desktop exposes exactly one
+isolated profile for each of the three shipping kernels. `ProfileId` remains in
+the host contract, database keys, and data-root layout so kernel state can never
+collide, but arbitrary same-kernel multi-account/profile CRUD is not part of the
+rightsholder-approved 1.0 product scope. This is a product boundary, not a
+placeholder or simulated profile manager.
+
 ## First run and workspace policy
 
 The first-run guide appears until setup completes. It shows current health for
@@ -157,14 +164,26 @@ ledger by native update time. There are no seeded rows. Local filtering only
 filters the already fetched real summaries.
 
 Creating a session requires a workspace and an operational kernel. The dialog
-selects kernel, title, workspace trust, approval policy, sandbox request, and
-the previously selected real model. Selecting a row calls resume before reading
-history. Session actions call the host rename, fork, and archive operations;
+selects kernel, title, workspace trust, the previously selected real model, and
+only the approval/sandbox policies the selected adapter explicitly advertises.
+Codex exposes its native approval and sandbox choices; TLAH exposes its native
+permission modes but no OS-sandbox selector; OpenCode exposes neither per-turn
+override and therefore shows neither control. Elevated choices require a second
+confirmation. Selecting a row calls resume before reading history. Session
+actions call the host rename, fork, and archive operations;
 fork and archive are exposed only when the descriptor advertises support.
 Archive requires confirmation.
 
+The host canonicalizes the chosen policy against the adapter descriptor and
+persists it in nonsecret session metadata. Native refresh/resume and fork keep
+those host-owned keys. The inspector displays the effective policy and the
+composer reuses that exact session policy; a missing legacy value resolves only
+to the adapter-advertised safe default. Unsupported cross-kernel values are
+rejected before an adapter request.
+
 The composer rejects blank prompts. A new turn carries text, validated
-attachment paths, model, approval mode, and sandbox mode. During a live turn it
+attachment paths, model, and only the selected kernel's supported security
+options. During a live turn it
 becomes a steering composer only when the adapter reports
 `CanSteerActiveTurn`; otherwise it stays unavailable until the turn finishes or
 is cancelled. Cancel appears only when the adapter supports it. `Ctrl+Enter`

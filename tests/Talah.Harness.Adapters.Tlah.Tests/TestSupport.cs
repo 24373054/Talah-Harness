@@ -65,6 +65,8 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
     public bool RunCancellationObserved { get; private set; }
     public bool IgnoreRunCancellation { get; set; }
     public bool EmitApproval { get; set; }
+    public AgentRunOptions? CapturedRunOptions { get; private set; }
+    public int RunCallCount => _state.RunCallCount;
     public string Provider { get; set; } = "openai";
     public string Model { get; set; } = "gpt-4o";
     public Guid RunId => _state.RunId;
@@ -148,6 +150,7 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
     public async Task<SendMessageResult> RunAsync(Guid chatId, string prompt, AgentRunOptions options, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _state.RunCallCount);
+        CapturedRunOptions = options;
         var now = DateTime.UtcNow;
         var user = new Message { ChatId = chatId, Role = "user", Content = prompt, SequenceNum = 1, CreatedAt = now };
         var assistant = new Message { ChatId = chatId, Role = "assistant", Content = "native answer", SequenceNum = 2, CreatedAt = now };

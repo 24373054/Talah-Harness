@@ -120,6 +120,8 @@ public sealed class OpenCodeClientTests
         Assert.Equal(SecurityEnforcementKind.PermissionGate, adapter.Descriptor.Security.EnforcementKind);
         Assert.False(adapter.Descriptor.Security.NetworkRestricted);
         Assert.False(adapter.Descriptor.Security.ProcessRestricted);
+        Assert.True(adapter.Descriptor.Security.ApprovalPolicies is null or { Count: 0 });
+        Assert.True(adapter.Descriptor.Security.SandboxPolicies is null or { Count: 0 });
         Assert.False(adapter.Descriptor.Capabilities.CanSteerActiveTurn);
         Assert.False(adapter.Descriptor.Capabilities.CanReplayEvents);
     }

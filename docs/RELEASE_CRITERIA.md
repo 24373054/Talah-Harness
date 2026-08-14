@@ -16,8 +16,9 @@ promise by the rightsholder.
 - [ ] TLAH: create/resume/cancel native runs, stream content and activity,
       preserve native tool approvals, history, checkpoint recovery, provider
       settings, and workspace restrictions.
-- [ ] The user can create profiles, select a kernel per conversation, select a
-      workspace, attach paths, inspect changes, and recover interrupted work.
+- [ ] The user can configure the isolated Codex, OpenCode, and TLAH profiles,
+      select one kernel per conversation, select a workspace, attach paths,
+      inspect changes, and recover interrupted work.
 - [ ] No production path returns simulated model output or silently falls back
       to a test double.
 
@@ -38,4 +39,3 @@ promise by the rightsholder.
       are produced from a clean checkout.
 - [ ] All unit, contract, adapter integration, UI smoke, and packaging checks pass.
 - [ ] No P0/P1 defects and no known credential-loss or destructive replay defect.
-

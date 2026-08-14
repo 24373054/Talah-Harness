@@ -187,8 +187,14 @@ public sealed class KernelHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(request);
         WorkspaceDescriptor workspace = _workspacePolicy.Normalize(request.Workspace);
         await _repository.UpsertWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false);
-        KernelSessionSummary result = await Get(key).CreateSessionAsync(request with { Workspace = workspace }, cancellationToken).ConfigureAwait(false);
+        IKernelAdapter adapter = Get(key);
+        (string? approvalMode, string? sandboxMode) = NormalizeSecurityOptions(
+            adapter.Descriptor.Security,
+            request.Options?.GetValueOrDefault("approvalMode"),
+            request.Options?.GetValueOrDefault("sandboxMode"));
+        KernelSessionSummary result = await adapter.CreateSessionAsync(request with { Workspace = workspace }, cancellationToken).ConfigureAwait(false);
         ValidateOwnership(key, result.Session);
+        result = ApplySessionSecurityMetadata(result, approvalMode, sandboxMode);
         result = await PreserveWorkspaceBindingAsync(result, workspace.WorkspaceId, cancellationToken).ConfigureAwait(false);
         await _repository.UpsertSessionAsync(result, cancellationToken).ConfigureAwait(false);
         return result;
@@ -210,6 +216,7 @@ public sealed class KernelHost : IAsyncDisposable
         KernelSessionSummary result = await Get(key).ForkSessionAsync(request, cancellationToken).ConfigureAwait(false);
         ValidateOwnership(key, result.Session);
         StoredSession? parent = await _repository.GetSessionAsync(request.Session, cancellationToken).ConfigureAwait(false);
+        result = PreserveSessionSecurityMetadata(result, parent?.Summary.Metadata);
         result = await PreserveWorkspaceBindingAsync(
             result,
             request.Session.WorkspaceId ?? parent?.Summary.Session.WorkspaceId,
@@ -254,7 +261,16 @@ public sealed class KernelHost : IAsyncDisposable
         StoredSession stored = await RequireStoredSessionAsync(session, cancellationToken).ConfigureAwait(false);
         WorkspaceDescriptor workspace = await RequireWorkspaceAsync(stored.Summary.Session.WorkspaceId, cancellationToken).ConfigureAwait(false);
         _workspacePolicy.ValidateReferencedPaths(workspace, input.ReferencedPaths);
-        KernelTurn turn = await Get(Key(session)).StartTurnAsync(session, input, options, cancellationToken).ConfigureAwait(false);
+        IKernelAdapter adapter = Get(Key(session));
+        (string? approvalMode, string? sandboxMode) = NormalizeSecurityOptions(
+            adapter.Descriptor.Security,
+            options.ApprovalMode,
+            options.SandboxMode);
+        KernelTurn turn = await adapter.StartTurnAsync(
+            session,
+            input,
+            options with { ApprovalMode = approvalMode, SandboxMode = sandboxMode },
+            cancellationToken).ConfigureAwait(false);
         ValidateOwnership(Key(session), turn.Session);
         await _repository.UpsertTurnAsync(stored.HostSessionId, turn.NativeTurnId, turn.Status, turn.StartedAt, cancellationToken: cancellationToken).ConfigureAwait(false);
         return turn;
@@ -556,12 +572,67 @@ public sealed class KernelHost : IAsyncDisposable
         string? preferredWorkspaceId,
         CancellationToken cancellationToken)
     {
-        if (summary.Session.WorkspaceId is not null) return summary;
         StoredSession? existing = await _repository.GetSessionAsync(summary.Session, cancellationToken).ConfigureAwait(false);
         string? workspaceId = preferredWorkspaceId ?? existing?.Summary.Session.WorkspaceId;
-        return workspaceId is null
-            ? summary
-            : summary with { Session = summary.Session with { WorkspaceId = workspaceId } };
+        KernelSessionSummary preserved = PreserveSessionSecurityMetadata(summary, existing?.Summary.Metadata);
+        return workspaceId is null || preserved.Session.WorkspaceId is not null
+            ? preserved
+            : preserved with { Session = preserved.Session with { WorkspaceId = workspaceId } };
+    }
+
+    private static KernelSessionSummary ApplySessionSecurityMetadata(
+        KernelSessionSummary summary,
+        string? approvalMode,
+        string? sandboxMode)
+    {
+        if (approvalMode is null && sandboxMode is null)
+            return summary;
+        var metadata = summary.Metadata is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(summary.Metadata, StringComparer.Ordinal);
+        if (approvalMode is not null) metadata[SessionSecurityMetadata.ApprovalMode] = approvalMode;
+        if (sandboxMode is not null) metadata[SessionSecurityMetadata.SandboxMode] = sandboxMode;
+        return summary with { Metadata = metadata };
+    }
+
+    private static KernelSessionSummary PreserveSessionSecurityMetadata(
+        KernelSessionSummary summary,
+        IReadOnlyDictionary<string, string>? existingMetadata)
+    {
+        if (existingMetadata is null)
+            return summary;
+        var metadata = summary.Metadata is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(summary.Metadata, StringComparer.Ordinal);
+        foreach (string key in new[] { SessionSecurityMetadata.ApprovalMode, SessionSecurityMetadata.SandboxMode })
+        {
+            if (!metadata.ContainsKey(key) && existingMetadata.TryGetValue(key, out string? value))
+                metadata[key] = value;
+        }
+        return metadata.Count == 0 ? summary : summary with { Metadata = metadata };
+    }
+
+    private static (string? ApprovalMode, string? SandboxMode) NormalizeSecurityOptions(
+        SecurityDescriptor security,
+        string? approvalMode,
+        string? sandboxMode) =>
+        (
+            NormalizeSecurityOption(security.ApprovalPolicies, approvalMode, "approval"),
+            NormalizeSecurityOption(security.SandboxPolicies, sandboxMode, "sandbox")
+        );
+
+    private static string? NormalizeSecurityOption(
+        IReadOnlyList<KernelSecurityPolicyOption>? supported,
+        string? value,
+        string kind)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        KernelSecurityPolicyOption? match = supported?.FirstOrDefault(option =>
+            string.Equals(option.Value, value.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+            throw new NotSupportedException($"The selected kernel does not support the requested {kind} policy.");
+        return match.Value;
     }
 
     private static KernelProfileKey Key(KernelProfile profile) => new(profile.AdapterId, profile.ProfileId);

@@ -79,6 +79,27 @@ public sealed class OpenCodeProcessTests
         await adapter.DisposeAsync();
     }
 
+    [Theory]
+    [InlineData("on-request", null)]
+    [InlineData(null, "workspace-write")]
+    public async Task PerTurnCrossKernelPoliciesAreRejectedBeforeOpenCodeRequest(string? approvalMode, string? sandboxMode)
+    {
+        var process = new FakeProcess("OpenCode server listening on http://127.0.0.1:43123");
+        var handler = new RecordingHandler(_ => OpenCodeClientTests.Json("""{"healthy":true,"version":"1.18.9"}"""));
+        var adapter = new OpenCodeAdapter(new StubDiscovery(Compatible()), new FakeSupervisor(process), handler, TimeSpan.FromSeconds(1));
+        await adapter.InitializeAsync(Context());
+        int requestsBeforeTurn = handler.Requests.Count;
+        var session = new SessionRef(OpenCodeAdapter.Id, "profile", "ses_policy");
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => adapter.StartTurnAsync(
+            session,
+            new TurnInput([new TextContentBlock("policy")]),
+            new TurnOptions(null, approvalMode, sandboxMode, null)));
+
+        Assert.Equal(requestsBeforeTurn, handler.Requests.Count);
+        await adapter.DisposeAsync();
+    }
+
     [Fact]
     public async Task LivePinnedHealthAndCapturedSchemaSmoke_IsOptInAndNonBillable()
     {

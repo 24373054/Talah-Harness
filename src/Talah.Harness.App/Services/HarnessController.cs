@@ -157,17 +157,17 @@ public sealed class HarnessController : IAsyncDisposable
     }
 
     public async Task<KernelSessionSummary> CreateSessionAsync(
-        string adapterId, string? title, string? modelId, string approvalMode, string sandboxMode,
+        string adapterId, string? title, string? modelId, string? approvalMode, string? sandboxMode,
         CancellationToken cancellationToken = default)
     {
         WorkspaceDescriptor workspace = Workspace ?? throw new InvalidOperationException("Choose a workspace before creating a session.");
         ProfileRuntimeState profile = RequireProfile(adapterId, operational: true);
         var options = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["approvalMode"] = approvalMode,
-            ["sandboxMode"] = sandboxMode,
             ["workspaceTrusted"] = workspace.IsTrusted.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
+        if (!string.IsNullOrWhiteSpace(approvalMode)) options["approvalMode"] = approvalMode;
+        if (!string.IsNullOrWhiteSpace(sandboxMode)) options["sandboxMode"] = sandboxMode;
         return await _host.CreateSessionAsync(profile.Key,
             new CreateSessionRequest(workspace, NullIfWhiteSpace(title), modelId, null, options), cancellationToken).ConfigureAwait(false);
     }
@@ -203,7 +203,7 @@ public sealed class HarnessController : IAsyncDisposable
 
     public async Task<KernelTurn> StartTurnAsync(
         SessionRef session, string prompt, IReadOnlyList<string> referencedPaths,
-        string? modelId, string approvalMode, string sandboxMode,
+        string? modelId, string? approvalMode, string? sandboxMode,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("Enter a nonempty prompt.", nameof(prompt));

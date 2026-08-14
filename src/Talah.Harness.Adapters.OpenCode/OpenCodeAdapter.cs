@@ -243,6 +243,8 @@ public sealed class OpenCodeAdapter(
     public async Task<KernelTurn> StartTurnAsync(SessionRef session, TurnInput input, TurnOptions options, CancellationToken cancellationToken = default)
     {
         Validate(session);
+        if (!string.IsNullOrWhiteSpace(options.ApprovalMode) || !string.IsNullOrWhiteSpace(options.SandboxMode))
+            throw new NotSupportedException("OpenCode Server 1.18.9 does not expose per-turn approval or OS-sandbox policy controls.");
         string messageId = "msg_" + Guid.NewGuid().ToString("N");
         IReadOnlyList<object> parts = ToPromptParts(input);
         (string ProviderId, string ModelId)? model = ParseModel(options.ModelId);
