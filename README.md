@@ -15,10 +15,12 @@ tool semantics instead of being reduced to a lowest-common-denominator chatbot.
 
 ## Product status
 
-Active development toward the complete `1.0.0` Windows x64 release. The release
-gate is defined in [`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md); test
-doubles are allowed only inside test assemblies and are never a shipping
-fallback.
+The repository implements the complete `1.0.0` Windows x64 product and its
+fail-closed release pipeline. Unsigned local builds are development evidence,
+not public releases; the `v1.0.0` workflow requires the production signing
+identity, HTTPS release origin, and final clean-machine qualification. The gate
+is defined in [`docs/RELEASE_CRITERIA.md`](docs/RELEASE_CRITERIA.md). Test doubles
+are allowed only inside test assemblies and are never a shipping fallback.
 
 ## Repository layout
 
@@ -42,5 +44,6 @@ third_party/TLAH-Studio/   Read-only, commit-pinned Git submodule
 
 Talah Harness is publicly visible source under the repository's proprietary
 source license. Third-party components retain their own licenses; see
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
-
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The common-rightsholder
+grant for the TLAH Studio-derived work is recorded in
+[`docs/RIGHTSHOLDER_AUTHORIZATION.md`](docs/RIGHTSHOLDER_AUTHORIZATION.md).

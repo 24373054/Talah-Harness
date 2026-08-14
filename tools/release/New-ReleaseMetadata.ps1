@@ -77,6 +77,7 @@ $provenance = [ordered]@{
     packageSha256 = $packageHash
     sbom = 'metadata/sbom.cdx.json'
     dependencyInventory = 'metadata/nuget-dependencies.json'
+    rightsholderAuthorization = 'metadata/RIGHTSHOLDER_AUTHORIZATION.md'
     signing = if ($Signed) { 'Authenticode signed and timestamped' } else { 'UNSIGNED DEVELOPMENT ARTIFACT - NOT FOR PUBLIC DISTRIBUTION' }
 }
 $provenancePath = Join-Path $artifactPath 'provenance.json'

@@ -39,6 +39,27 @@ try {
 }
 catch { Add-Failure "Unable to parse the app project: $($_.Exception.Message)" }
 
+$solutionPath = Join-Path $RepositoryRoot 'Talah.Harness.sln'
+$solutionContent = Get-Content -LiteralPath $solutionPath -Raw
+foreach ($testProject in Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot 'tests') -Recurse -Filter '*.Tests.csproj') {
+    $relativeTestProject = $testProject.FullName.Substring($RepositoryRoot.Length).TrimStart('\', '/').Replace('/', '\')
+    if (-not $solutionContent.Contains('"' + $relativeTestProject + '"', [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "Test project is not included in the release solution: $relativeTestProject"
+    }
+}
+foreach ($tlahProject in @(
+    @{ Path = 'third_party\TLAH-Studio\TLAHStudio.Core\TLAHStudio.Core.csproj'; Id = 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890' },
+    @{ Path = 'third_party\TLAH-Studio\TLAHStudio.Data\TLAHStudio.Data.csproj'; Id = 'B2C3D4E5-F6A7-8901-BCDE-F12345678901' }
+)) {
+    if (-not $solutionContent.Contains('"' + $tlahProject.Path + '"', [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "TLAH release dependency is not included in the release solution: $($tlahProject.Path)"
+    }
+    $releaseMapping = "{$($tlahProject.Id)}.Release|Any CPU.ActiveCfg = Release|Any CPU"
+    if (-not $solutionContent.Contains($releaseMapping, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "TLAH release dependency is not mapped to Release: $($tlahProject.Path)"
+    }
+}
+
 $manifestTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'installer\msix\AppxManifest.xml.in') -Raw
 foreach ($expected in @($script:PackageIdentityName, $script:MinimumWindowsVersion, 'ProcessorArchitecture="x64"', 'Talah.Harness.App.exe')) {
     if (-not $manifestTemplate.Contains($expected)) { Add-Failure "MSIX manifest template is missing '$expected'." }
@@ -108,7 +129,7 @@ foreach ($file in $productionScanFiles) {
 if ($ArtifactDirectory) {
     $artifacts = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
     Assert-RepositoryChildPath -Path $artifacts -RepositoryRoot $RepositoryRoot | Out-Null
-    foreach ($required in @('SHA256SUMS', 'provenance.json', 'update-manifest.json', 'metadata\sbom.cdx.json', 'metadata\nuget-dependencies.json', 'metadata\THIRD-PARTY-NOTICES.md')) {
+    foreach ($required in @('SHA256SUMS', 'provenance.json', 'update-manifest.json', 'metadata\sbom.cdx.json', 'metadata\nuget-dependencies.json', 'metadata\THIRD-PARTY-NOTICES.md', 'metadata\RIGHTSHOLDER_AUTHORIZATION.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $artifacts $required) -PathType Leaf)) { Add-Failure "Release artifact is missing: $required" }
     }
     $update = Get-Content -LiteralPath (Join-Path $artifacts 'update-manifest.json') -Raw | ConvertFrom-Json

@@ -6,7 +6,7 @@ and copies the exact license texts distributed with each binary dependency.
 
 | Component | Integration | License / terms | Source |
 |---|---|---|---|
-| TLAH Studio | Read-only Git submodule pinned at `3ff42e06dca0359ce499c490cc7879934d439150`; native-runtime behavior and authorized design reuse | TLAH Studio Proprietary Source License; authorized for this product by the common rightsholder; this notice does not relicense it | https://github.com/24373054/TLAH-Studio |
+| TLAH Studio | Read-only Git submodule pinned at `3ff42e06dca0359ce499c490cc7879934d439150`; native-runtime behavior and authorized design reuse | TLAH Studio Proprietary Source License; authorized for this product by the common rightsholder and recorded in `docs/RIGHTSHOLDER_AUTHORIZATION.md`; this notice does not relicense it | https://github.com/24373054/TLAH-Studio |
 | OpenAI Codex CLI 0.147.0 | User-installed external `codex app-server` process; generated protocol schemas are pinned under `schemas/codex/0.147.0` and the binary is not redistributed | Apache-2.0 for the open-source Codex CLI; OpenAI service terms apply to service use | https://github.com/openai/codex |
 | OpenCode 1.18.9 | User-installed external HTTP/SSE server; release assets and schema are pinned by SHA-256 but binaries are not redistributed | MIT | https://github.com/anomalyco/opencode/releases/tag/v1.18.9 |
 | Agent Client Protocol | Optional protocol compatibility layer | Apache-2.0 | https://github.com/agentclientprotocol/agent-client-protocol |

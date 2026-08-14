@@ -973,8 +973,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
             next.NativeSessionId,
             next.NativeTurnId,
             null,
-            Interlocked.Increment(ref _sequence),
-            DateTimeOffset.UtcNow,
+            next.Sequence,
+            next.Timestamp,
             KernelEventKind.Diagnostic,
             new DiagnosticEventData(new KernelDiagnostic(
                 "CODEX_EVENT_DELTA_GAP",

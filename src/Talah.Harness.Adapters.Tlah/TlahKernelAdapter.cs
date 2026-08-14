@@ -534,8 +534,8 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
             next.NativeSessionId,
             next.NativeTurnId,
             null,
-            Interlocked.Increment(ref _sequence),
-            DateTimeOffset.UtcNow,
+            next.Sequence,
+            next.Timestamp,
             KernelEventKind.Diagnostic,
             new DiagnosticEventData(new KernelDiagnostic(
                 "TLAH_EVENT_DELTA_GAP",

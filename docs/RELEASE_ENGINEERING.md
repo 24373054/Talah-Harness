@@ -83,6 +83,7 @@ build/release/
   metadata/sbom.cdx.json
   metadata/nuget-dependencies.json
   metadata/THIRD-PARTY-NOTICES.md
+  metadata/RIGHTSHOLDER_AUTHORIZATION.md
   metadata/LICENSE
   update-manifest.json
   provenance.json
@@ -96,7 +97,8 @@ release payload, because durations and machine details are inherently
 environment-specific.
 
 `provenance.json` binds the source commit, source-derived timestamp, TLAH Studio
-submodule pin, runtime identifier, package hash, SBOM, and signing state.
+submodule pin, runtime identifier, package hash, SBOM, rightsholder authorization
+record, and signing state.
 `SHA256SUMS` covers every release artifact other than itself. The CycloneDX tool
 version is pinned in `Release.Common.ps1`; non-deterministic SBOM serial numbers
 are removed and its timestamp is derived from the source commit. MSIX inputs have
@@ -111,7 +113,9 @@ and OpenCode 1.18.9 schema/hash provenance remain source inputs. The read-only
 TLAH Studio submodule must stay at
 `3ff42e06dca0359ce499c490cc7879934d439150` and clean. The generated brand assets
 are first-party material under the repository's existing proprietary license;
-the release process never changes that license assumption.
+the release process never changes that license assumption. The common-rightsholder
+grant is recorded in `docs/RIGHTSHOLDER_AUTHORIZATION.md` and copied into every
+release metadata set.
 
 ## GitHub release configuration
 

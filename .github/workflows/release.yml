@@ -94,4 +94,5 @@ jobs:
             build/release/metadata/sbom.cdx.json
             build/release/metadata/nuget-dependencies.json
             build/release/metadata/THIRD-PARTY-NOTICES.md
+            build/release/metadata/RIGHTSHOLDER_AUTHORIZATION.md
             build/release/metadata/LICENSE

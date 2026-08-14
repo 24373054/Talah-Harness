@@ -54,6 +54,7 @@ foreach ($project in $inventory.projects) {
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $outputPath 'THIRD-PARTY-NOTICES.md') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $outputPath 'LICENSE') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\RIGHTSHOLDER_AUTHORIZATION.md') -Destination (Join-Path $outputPath 'RIGHTSHOLDER_AUTHORIZATION.md') -Force
 
 [pscustomobject]@{
     SbomPath = $sbomPath

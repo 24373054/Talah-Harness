@@ -14,6 +14,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Persistence",
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4DFFE8AA-97F7-4C9D-A752-A385F5112DED}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "third_party", "third_party", "{D8A4794D-F8E5-4AF0-A646-81ABDA30A8F1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TLAHStudio.Core", "third_party\TLAH-Studio\TLAHStudio.Core\TLAHStudio.Core.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TLAHStudio.Data", "third_party\TLAH-Studio\TLAHStudio.Data\TLAHStudio.Data.csproj", "{B2C3D4E5-F6A7-8901-BCDE-F12345678901}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Runtime.Tests", "tests\Talah.Harness.Runtime.Tests\Talah.Harness.Runtime.Tests.csproj", "{7583210D-7627-4996-93F0-B594336BF71A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Persistence.Tests", "tests\Talah.Harness.Persistence.Tests\Talah.Harness.Persistence.Tests.csproj", "{189D1C01-62E3-4213-89D3-171C4BDFC23F}"
@@ -33,6 +39,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.OpenCode.Tests", "tests\Talah.Harness.Adapters.OpenCode.Tests\Talah.Harness.Adapters.OpenCode.Tests.csproj", "{84621CBA-D877-45F5-8249-0130AB28F113}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.Adapters.Tlah.Tests", "tests\Talah.Harness.Adapters.Tlah.Tests\Talah.Harness.Adapters.Tlah.Tests.csproj", "{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talah.Harness.App.Tests", "tests\Talah.Harness.App.Tests\Talah.Harness.App.Tests.csproj", "{E0F31C16-2788-47D7-95AE-5283666BC6B9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -96,6 +104,18 @@ Global
 		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E0F31C16-2788-47D7-95AE-5283666BC6B9}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{E0F31C16-2788-47D7-95AE-5283666BC6B9}.Debug|Any CPU.Build.0 = Debug|x64
+		{E0F31C16-2788-47D7-95AE-5283666BC6B9}.Release|Any CPU.ActiveCfg = Release|x64
+		{E0F31C16-2788-47D7-95AE-5283666BC6B9}.Release|Any CPU.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -114,5 +134,8 @@ Global
 		{D2663643-C73A-4AF4-9958-148F23B74B6A} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
 		{84621CBA-D877-45F5-8249-0130AB28F113} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
 		{4292B4BB-2133-4CA5-ADE1-B2FB32932DB7} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{E0F31C16-2788-47D7-95AE-5283666BC6B9} = {4DFFE8AA-97F7-4C9D-A752-A385F5112DED}
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {D8A4794D-F8E5-4AF0-A646-81ABDA30A8F1}
+		{B2C3D4E5-F6A7-8901-BCDE-F12345678901} = {D8A4794D-F8E5-4AF0-A646-81ABDA30A8F1}
 	EndGlobalSection
 EndGlobal
