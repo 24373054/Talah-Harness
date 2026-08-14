@@ -196,7 +196,12 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
     {
         Guid id = ValidateSession(session);
         Chat chat = await _runtime.GetChatAsync(id, cancellationToken).ConfigureAwait(false);
-        return MapSession(chat);
+        AgentRunSnapshot? latestRun = await _runtime.GetLatestRunAsync(id, cancellationToken).ConfigureAwait(false);
+        if (latestRun?.ChatId != id)
+            latestRun = null;
+        else
+            RecoverPendingApproval(session, latestRun);
+        return MapSession(chat, session.WorkspaceId, MapSessionStatus(chat, latestRun));
     }
 
     public Task<KernelSessionSummary> ForkSessionAsync(ForkSessionRequest request, CancellationToken cancellationToken = default)
@@ -405,27 +410,18 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         active.RunId = update.AgentRunId;
         if (update.EventType == AgentEventTypes.ApprovalRequested && update.ToolInvocationId is Guid invocation)
         {
-            string permissionId = invocation.ToString("D");
-            _approvals[permissionId] = new PendingApproval(invocation, update.AgentRunId, active.TurnId);
             JsonElement data = ParseJson(update.DataJson);
-            string toolName = TryString(data, "toolName") ?? "native-tool";
-            string arguments = TryObject(data, "arguments") ?? "{}";
-            var request = new PermissionRequest(
-                permissionId,
-                active.Session,
-                active.TurnId,
-                "tlah-tool",
-                $"Allow {toolName}?",
+            PermissionRequest? request = RegisterApproval(
+                active,
+                update.AgentRunId,
+                invocation,
+                TryString(data, "toolName") ?? "native-tool",
+                TryObject(data, "arguments") ?? "{}",
+                TryString(data, "safetyLevel") ?? "unknown",
                 update.Summary,
-                [new ResourceImpact("tool", toolName, "execute", TryString(data, "safetyLevel") ?? "unknown", arguments)],
-                [
-                    new PermissionChoice("deny", PermissionDecisionKind.Deny, "Deny", "Do not run this tool."),
-                    new PermissionChoice("allow-once", PermissionDecisionKind.AllowOnce, "Allow once", "Allow this invocation."),
-                    new PermissionChoice("allow-session", PermissionDecisionKind.AllowForSession, "Allow for session", "Remember native TLAH policy for this chat."),
-                    new PermissionChoice("allow-amended", PermissionDecisionKind.AllowWithAmendedInput, "Allow amended", "Run with amended JSON input.", true)
-                ],
                 data);
-            Publish(active.SessionId, active.TurnId, invocation, KernelEventKind.PermissionRequested, new PermissionEventData(request));
+            if (request is not null)
+                Publish(active.SessionId, active.TurnId, invocation, KernelEventKind.PermissionRequested, new PermissionEventData(request));
             return;
         }
 
@@ -496,6 +492,89 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         active.Cancellation.Dispose();
     }
 
+    private void RecoverPendingApproval(SessionRef session, AgentRunSnapshot run)
+    {
+        ToolInvocationSnapshot? invocation = run.Status == AgentRunStatuses.AwaitingApproval
+            ? run.PendingApproval
+            : null;
+        if (invocation is null || invocation.Status != ToolInvocationStatuses.AwaitingApproval)
+            return;
+
+        string turnId = run.TurnId.ToString("D");
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_eventLifetime.Token);
+        var active = new ActiveTurn(session, turnId, cancellation) { RunId = run.Id };
+        if (!_activeTurns.TryAdd(turnId, active))
+        {
+            cancellation.Dispose();
+            return;
+        }
+
+        JsonElement vendorData = JsonSerializer.SerializeToElement(new
+        {
+            toolName = invocation.ToolName,
+            arguments = ParseJson(invocation.ArgumentsJson),
+            safetyLevel = invocation.SafetyLevel,
+            safetySummary = invocation.SafetySummary,
+            safety = ParseJson(invocation.SafetyJson),
+            safetyWarning = invocation.SafetyWarning,
+            recoveredFromCheckpoint = true
+        });
+        string reason = string.IsNullOrWhiteSpace(invocation.SafetySummary)
+            ? "A native tool checkpoint is waiting for approval."
+            : invocation.SafetySummary;
+
+        PermissionRequest? request = RegisterApproval(
+                active,
+                run.Id,
+                invocation.Id,
+                invocation.ToolName,
+                invocation.ArgumentsJson,
+                invocation.SafetyLevel,
+                reason,
+                vendorData);
+        if (request is null)
+        {
+            _activeTurns.TryRemove(turnId, out _);
+            cancellation.Dispose();
+            return;
+        }
+
+        Publish(active.SessionId, active.TurnId, null, KernelEventKind.TurnStarted,
+            new TurnEventData(TurnStatus.WaitingForApproval, "Recovered a native run waiting for approval."));
+        Publish(active.SessionId, active.TurnId, invocation.Id, KernelEventKind.PermissionRequested, new PermissionEventData(request));
+    }
+
+    private PermissionRequest? RegisterApproval(
+        ActiveTurn active,
+        Guid runId,
+        Guid invocationId,
+        string toolName,
+        string arguments,
+        string safetyLevel,
+        string reason,
+        JsonElement vendorData)
+    {
+        string permissionId = invocationId.ToString("D");
+        if (!_approvals.TryAdd(permissionId, new PendingApproval(invocationId, runId, active.TurnId)))
+            return null;
+
+        return new PermissionRequest(
+            permissionId,
+            active.Session,
+            active.TurnId,
+            "tlah-tool",
+            $"Allow {toolName}?",
+            reason,
+            [new ResourceImpact("tool", toolName, "execute", safetyLevel, arguments)],
+            [
+                new PermissionChoice("deny", PermissionDecisionKind.Deny, "Deny", "Do not run this tool."),
+                new PermissionChoice("allow-once", PermissionDecisionKind.AllowOnce, "Allow once", "Allow this invocation."),
+                new PermissionChoice("allow-session", PermissionDecisionKind.AllowForSession, "Allow for session", "Remember native TLAH policy for this chat."),
+                new PermissionChoice("allow-amended", PermissionDecisionKind.AllowWithAmendedInput, "Allow amended", "Run with amended JSON input.", true)
+            ],
+            vendorData);
+    }
+
     private void Publish(Guid? sessionId, string? turnId, Guid? itemId, KernelEventKind kind, KernelEventData data)
     {
         KernelInitializationContext? context = _context;
@@ -549,13 +628,28 @@ public sealed class TlahKernelAdapter(ITlahNativeRuntime runtime, TimeSpan? shut
         chat.MessageCount == 0 ? null : $"{chat.MessageCount} messages",
         new Dictionary<string, string> { ["messageCount"] = chat.MessageCount.ToString() });
 
-    private KernelSessionSummary MapSession(Chat chat, string? workspaceId = null) => new(
+    private KernelSessionSummary MapSession(Chat chat, string? workspaceId = null, SessionStatus? status = null) => new(
         MakeSession(chat.Id, workspaceId),
         chat.Title,
-        chat.IsArchived ? SessionStatus.Archived : SessionStatus.Idle,
+        chat.IsArchived ? SessionStatus.Archived : status ?? SessionStatus.Idle,
         new DateTimeOffset(chat.CreatedAt, TimeSpan.Zero),
         new DateTimeOffset(chat.UpdatedAt, TimeSpan.Zero),
         null);
+
+    private static SessionStatus MapSessionStatus(Chat chat, AgentRunSnapshot? run)
+    {
+        if (chat.IsArchived)
+            return SessionStatus.Archived;
+        return run?.Status switch
+        {
+            AgentRunStatuses.Running => SessionStatus.Running,
+            AgentRunStatuses.AwaitingApproval => SessionStatus.WaitingForApproval,
+            AgentRunStatuses.Paused => SessionStatus.Paused,
+            AgentRunStatuses.Completed => SessionStatus.Completed,
+            AgentRunStatuses.Failed => SessionStatus.Failed,
+            _ => SessionStatus.Idle
+        };
+    }
 
     private SessionRef MakeSession(Guid chatId, string? workspaceId = null) =>
         new(Id, EnsureInitialized().Profile.ProfileId, chatId.ToString("D"), WorkspaceId: workspaceId);

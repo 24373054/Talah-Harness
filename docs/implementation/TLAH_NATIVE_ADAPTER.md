@@ -48,6 +48,7 @@ adapter validates containment before writing it.
 | Configure/logout | `UpdateGlobalSettingsAsync` | `ProtectedSecret` protects the key with Windows DPAPI before SQLite persistence. |
 | Models | `ProviderModelCatalog.FallbackModels` for the configured provider | Stable native catalog; no paid/network discovery during listing. |
 | Create/list/get/archive | `IChatService` | Native chat GUID is the native session id. |
+| Resume session | `GetChatOrThrowAsync`, then `GetLatestAgentRunAsync` | Reconciles durable run status. An unanswered native approval is rebuilt with its original run, turn, and invocation GUIDs; reopening alone never starts or resumes model execution. |
 | Session rename | `IChatService.UpdateChatAsync` exists in the runtime boundary | Harness contract 1 has no rename method, so the adapter cannot expose it yet. |
 | History | `IChatService.GetChatMessagesAsync` | Chronological native messages, cursor paged by the adapter. |
 | Start turn | `ILlmService.RunAgentTaskAsync` | Uses TLAH's native agent engine and tool graph. |
@@ -106,12 +107,38 @@ identity. Terminal events remove active-run state. Disposal cancels all turns,
 waits for their tasks, clears permission state, completes the channel, and
 disposes the native service provider.
 
+### Restart recovery contract
+
+`ResumeSessionAsync` reads the latest durable native run after it validates and
+loads the chat. The returned Harness session status reflects the native run
+status (running, waiting for approval, paused, completed, or failed), with an
+archived chat always remaining archived. Cancelled runs map back to idle because
+contract 1 has no cancelled session status.
+
+Only an `awaiting_approval` run with an invocation that is still explicitly
+`awaiting_approval` is reconstructed as an active Harness interaction. The
+adapter uses the checkpoint's native run GUID, turn GUID, invocation GUID,
+arguments, and safety metadata, publishes a waiting turn plus one permission
+request, and registers it with the existing approve/deny path. Repeating session
+resume on the same adapter instance is idempotent because the native turn and
+invocation registrations are accepted only once.
+
+Recovery is deliberately passive. Session reopen never calls
+`RunAgentTaskAsync` or `ResumeAgentTaskAsync`. The latter is called only after a
+caller explicitly approves or denies the recovered invocation through
+`RespondToPermissionAsync`, after native TLAH has durably recorded that decision.
+Running or paused checkpoints are surfaced but not automatically continued, and
+completed, cancelled, or failed runs are never registered or resumed. This is
+the safety boundary that prevents a stale checkpoint from replaying a tool whose
+side effects may already have occurred.
+
 ## Tests
 
 The focused unit suite uses the injectable `ITlahNativeRuntime` boundary to
 exercise mapping and lifecycle without a paid request: capability honesty,
 secret redaction, session/history paging, ordering and stream mapping, approval
-round trip, cancellation, archive, workspace containment, disposal, and
+round trip, crash/restart approval recovery (allow and deny), terminal checkpoint
+non-replay, cancellation, archive, workspace containment, disposal, and
 unsupported operations.
 
 `TlahNativeRuntimeIntegrationTests` composes the real upstream Core/Data graph,

@@ -132,6 +132,84 @@ public sealed class TlahKernelAdapterTests
         }
     }
 
+    [Theory]
+    [InlineData("allow-once", true)]
+    [InlineData("deny", false)]
+    public async Task ApprovalCheckpoint_IsRecoveredAfterRestart_WithoutReplay(string choiceId, bool approved)
+    {
+        using var temp = new TemporaryDirectory();
+        var state = new FakeNativeRuntimeState();
+        var firstRuntime = new FakeNativeRuntime(state) { EmitApproval = true };
+        var (firstAdapter, session) = await AdapterTestFactory.CreateAsync(firstRuntime, temp.Path);
+
+        _ = await firstAdapter.StartTurnAsync(
+            session,
+            new TurnInput([new TextContentBlock("write")]),
+            new TurnOptions(null, "request_approval", null, null));
+        _ = await WaitForEventAsync(firstAdapter, KernelEventKind.PermissionRequested);
+        await firstAdapter.DisposeAsync();
+
+        var secondRuntime = new FakeNativeRuntime(state);
+        await using var secondAdapter = await AdapterTestFactory.InitializeAsync(secondRuntime, temp.Path);
+        KernelSessionSummary firstResume = await secondAdapter.ResumeSessionAsync(session);
+        KernelSessionSummary repeatedResume = await secondAdapter.ResumeSessionAsync(session);
+
+        Assert.Equal(SessionStatus.WaitingForApproval, firstResume.Status);
+        Assert.Equal(SessionStatus.WaitingForApproval, repeatedResume.Status);
+        KernelEvent requested = await WaitForEventAsync(secondAdapter, KernelEventKind.PermissionRequested);
+        PermissionRequest permission = Assert.IsType<PermissionEventData>(requested.Data).Request;
+        Assert.Equal(state.InvocationId.ToString("D"), permission.PermissionId);
+        Assert.Equal(state.NativeTurnId.ToString("D"), permission.NativeTurnId);
+        Assert.Equal(state.NativeTurnId.ToString("D"), requested.NativeTurnId);
+        ResourceImpact impact = Assert.Single(permission.Impacts);
+        Assert.Equal("file_write", impact.Target);
+        Assert.Equal("write", impact.RiskLevel);
+        Assert.Equal("{\"path\":\"a.txt\"}", impact.Detail);
+
+        await secondAdapter.RespondToPermissionAsync(new PermissionResponse(permission.PermissionId, choiceId));
+        IReadOnlyList<KernelEvent> completionEvents = await ReadUntilAsync(secondAdapter, KernelEventKind.TurnCompleted);
+
+        Assert.DoesNotContain(completionEvents, item => item.Kind == KernelEventKind.PermissionRequested);
+        Assert.Equal(approved, state.LastApprovalApproved);
+        Assert.Equal(1, state.RunCallCount);
+        Assert.Equal(1, state.ApprovalDecisionCount);
+        Assert.Equal(1, state.ResumeCallCount);
+        Assert.Equal(approved ? 1 : 0, state.DestructiveExecutionCount);
+
+        KernelSessionSummary terminalResume = await secondAdapter.ResumeSessionAsync(session);
+        Assert.Equal(SessionStatus.Completed, terminalResume.Status);
+        Assert.Equal(1, state.RunCallCount);
+        Assert.Equal(1, state.ResumeCallCount);
+    }
+
+    [Fact]
+    public async Task TerminalCheckpoint_IsReconciledAfterRestart_WithoutResumingOrStartingRun()
+    {
+        using var temp = new TemporaryDirectory();
+        var state = new FakeNativeRuntimeState();
+        var firstRuntime = new FakeNativeRuntime(state);
+        var (firstAdapter, session) = await AdapterTestFactory.CreateAsync(firstRuntime, temp.Path);
+
+        _ = await firstAdapter.StartTurnAsync(
+            session,
+            new TurnInput([new TextContentBlock("finish")]),
+            new TurnOptions(null, null, null, null));
+        _ = await WaitForEventAsync(firstAdapter, KernelEventKind.TurnCompleted);
+        await firstAdapter.DisposeAsync();
+
+        var secondRuntime = new FakeNativeRuntime(state);
+        await using var secondAdapter = await AdapterTestFactory.InitializeAsync(secondRuntime, temp.Path);
+        KernelSessionSummary firstResume = await secondAdapter.ResumeSessionAsync(session);
+        KernelSessionSummary repeatedResume = await secondAdapter.ResumeSessionAsync(session);
+
+        Assert.Equal(SessionStatus.Completed, firstResume.Status);
+        Assert.Equal(SessionStatus.Completed, repeatedResume.Status);
+        Assert.Equal(1, state.RunCallCount);
+        Assert.Equal(0, state.ResumeCallCount);
+        Assert.Equal(0, state.ApprovalDecisionCount);
+        Assert.Equal(0, state.DestructiveExecutionCount);
+    }
+
     [Fact]
     public async Task Cancellation_Propagates_AndDisposalReleasesRuntime()
     {

@@ -24,24 +24,51 @@ internal sealed class TemporaryDirectory : IDisposable
     }
 }
 
+internal sealed class FakeNativeRuntimeState
+{
+    public ConcurrentDictionary<Guid, Chat> Chats { get; } = new();
+    public ConcurrentDictionary<Guid, List<Message>> Messages { get; } = new();
+    public Guid RunId { get; } = Guid.NewGuid();
+    public Guid InvocationId { get; } = Guid.NewGuid();
+    public Guid NativeTurnId { get; } = Guid.NewGuid();
+    public AgentRunSnapshot? LatestRun { get; set; }
+    public bool? LastApprovalApproved { get; set; }
+    public int RunCallCount;
+    public int ResumeCallCount;
+    public int ApprovalDecisionCount;
+    public int DestructiveExecutionCount;
+    public bool Cancelled;
+}
+
 internal sealed class FakeNativeRuntime : ITlahNativeRuntime
 {
-    private readonly ConcurrentDictionary<Guid, Chat> _chats = new();
-    private readonly ConcurrentDictionary<Guid, List<Message>> _messages = new();
+    private readonly FakeNativeRuntimeState _state;
+    private ConcurrentDictionary<Guid, Chat> Chats => _state.Chats;
+    private ConcurrentDictionary<Guid, List<Message>> Messages => _state.Messages;
+
+    public FakeNativeRuntime() : this(new FakeNativeRuntimeState())
+    {
+    }
+
+    public FakeNativeRuntime(FakeNativeRuntimeState state)
+    {
+        _state = state;
+    }
+
     public bool Configured { get; set; }
     public bool Disposed { get; private set; }
     public string? CapturedSecret { get; private set; }
     public Exception? ConfigureException { get; set; }
     public TaskCompletionSource<bool>? RunBlock { get; set; }
-    public bool ApprovalSet { get; private set; }
-    public bool Cancelled { get; private set; }
+    public bool ApprovalSet => _state.LastApprovalApproved == true;
+    public bool Cancelled => _state.Cancelled;
     public bool RunCancellationObserved { get; private set; }
     public bool IgnoreRunCancellation { get; set; }
     public bool EmitApproval { get; set; }
     public string Provider { get; set; } = "openai";
     public string Model { get; set; } = "gpt-4o";
-    public Guid RunId { get; } = Guid.NewGuid();
-    public Guid InvocationId { get; } = Guid.NewGuid();
+    public Guid RunId => _state.RunId;
+    public Guid InvocationId => _state.InvocationId;
 
     public Task InitializeAsync(string dataRoot, CancellationToken cancellationToken)
     {
@@ -77,26 +104,26 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
         Task.FromResult<IReadOnlyList<string>>(["gpt-4o", "gpt-4.1"]);
 
     public Task<IReadOnlyList<ChatSummaryDto>> ListChatsAsync(bool includeArchived, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<ChatSummaryDto>>(_chats.Values
+        Task.FromResult<IReadOnlyList<ChatSummaryDto>>(Chats.Values
             .Where(chat => includeArchived || !chat.IsArchived)
             .OrderBy(chat => chat.CreatedAt)
-            .Select(chat => new ChatSummaryDto(chat.Id, chat.Title, chat.UpdatedAt, _messages.GetValueOrDefault(chat.Id)?.Count ?? 0, IsArchived: chat.IsArchived))
+            .Select(chat => new ChatSummaryDto(chat.Id, chat.Title, chat.UpdatedAt, Messages.GetValueOrDefault(chat.Id)?.Count ?? 0, IsArchived: chat.IsArchived))
             .ToArray());
 
     public Task<Chat> GetChatAsync(Guid chatId, CancellationToken cancellationToken) =>
-        Task.FromResult(_chats.TryGetValue(chatId, out var chat) ? chat : throw new InvalidOperationException("Chat not found."));
+        Task.FromResult(Chats.TryGetValue(chatId, out var chat) ? chat : throw new InvalidOperationException("Chat not found."));
 
     public Task<Chat> CreateChatAsync(string title, string workspaceRoot, CancellationToken cancellationToken)
     {
         var chat = new Chat { Title = title };
-        _chats[chat.Id] = chat;
-        _messages[chat.Id] = [];
+        Chats[chat.Id] = chat;
+        Messages[chat.Id] = [];
         return Task.FromResult(chat);
     }
 
     public Task<Chat> SetArchivedAsync(Guid chatId, bool archived, CancellationToken cancellationToken)
     {
-        var chat = _chats[chatId];
+        var chat = Chats[chatId];
         chat.IsArchived = archived;
         chat.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult(chat);
@@ -104,13 +131,13 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
 
     public Task<Chat> RenameAsync(Guid chatId, string title, CancellationToken cancellationToken)
     {
-        var chat = _chats[chatId];
+        var chat = Chats[chatId];
         chat.Title = title;
         return Task.FromResult(chat);
     }
 
     public Task<IReadOnlyList<Message>> ReadMessagesAsync(Guid chatId, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<Message>>(_messages[chatId]);
+        Task.FromResult<IReadOnlyList<Message>>(Messages[chatId]);
 
     public Task SetModelAsync(Guid chatId, string model, CancellationToken cancellationToken)
     {
@@ -120,17 +147,20 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
 
     public async Task<SendMessageResult> RunAsync(Guid chatId, string prompt, AgentRunOptions options, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _state.RunCallCount);
         var now = DateTime.UtcNow;
         var user = new Message { ChatId = chatId, Role = "user", Content = prompt, SequenceNum = 1, CreatedAt = now };
         var assistant = new Message { ChatId = chatId, Role = "assistant", Content = "native answer", SequenceNum = 2, CreatedAt = now };
-        _messages[chatId].Add(user);
+        Messages[chatId].Add(user);
+        _state.LatestRun = Snapshot(chatId, AgentRunStatuses.Running);
         options.Progress?.Report(new AgentProgressUpdate(RunId, 1, AgentEventTypes.RunStarted, "info", "Native run started.", now,
-            Snapshot(chatId, AgentRunStatuses.Running)));
+            _state.LatestRun));
         options.OutputStream?.Report(new LlmStreamUpdate("native ", "native "));
         if (EmitApproval)
         {
+            _state.LatestRun = Snapshot(chatId, AgentRunStatuses.AwaitingApproval);
             options.Progress?.Report(new AgentProgressUpdate(RunId, 2, AgentEventTypes.ApprovalRequested, "warning", "Tool requires approval.", now,
-                Snapshot(chatId, AgentRunStatuses.AwaitingApproval), ToolInvocationId: InvocationId,
+                _state.LatestRun, ToolInvocationId: InvocationId,
                 DataJson: "{\"toolName\":\"file_write\",\"arguments\":{\"path\":\"a.txt\"},\"safetyLevel\":\"write\"}"));
             return Result(chatId, user, assistant, AgentRunStatuses.AwaitingApproval);
         }
@@ -150,34 +180,49 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
             }
         }
         options.OutputStream?.Report(new LlmStreamUpdate("answer", "native answer", IsFinal: true));
-        _messages[chatId].Add(assistant);
+        Messages[chatId].Add(assistant);
         return Result(chatId, user, assistant, AgentRunStatuses.Completed);
     }
 
     public Task<SendMessageResult> ResumeRunAsync(Guid runId, AgentRunOptions options, CancellationToken cancellationToken)
     {
-        var chatId = _chats.Keys.Single();
+        Interlocked.Increment(ref _state.ResumeCallCount);
+        if (runId != RunId)
+            throw new InvalidOperationException("Unexpected native run id.");
+        if (_state.LastApprovalApproved == true)
+            Interlocked.Increment(ref _state.DestructiveExecutionCount);
+        var chatId = Chats.Keys.Single();
         var now = DateTime.UtcNow;
-        var user = _messages[chatId].Single(message => message.Role == "user");
+        var user = Messages[chatId].Single(message => message.Role == "user");
         var assistant = new Message { ChatId = chatId, Role = "assistant", Content = "approved", SequenceNum = 2, CreatedAt = now };
-        _messages[chatId].Add(assistant);
+        Messages[chatId].Add(assistant);
+        _state.LatestRun = Snapshot(chatId, AgentRunStatuses.Running);
         options.Progress?.Report(new AgentProgressUpdate(RunId, 3, AgentEventTypes.ApprovalGranted, "info", "Approved.", now,
-            Snapshot(chatId, AgentRunStatuses.Running), ToolInvocationId: InvocationId));
+            _state.LatestRun, ToolInvocationId: InvocationId));
         return Task.FromResult(Result(chatId, user, assistant, AgentRunStatuses.Completed));
     }
 
     public Task<AgentRunSnapshot?> GetLatestRunAsync(Guid chatId, CancellationToken cancellationToken) =>
-        Task.FromResult<AgentRunSnapshot?>(Snapshot(chatId, AgentRunStatuses.Running));
+        Task.FromResult(_state.LatestRun is { ChatId: var latestChatId } && latestChatId == chatId
+            ? _state.LatestRun
+            : null);
 
     public Task SetApprovalAsync(Guid invocationId, bool approved, string scope, string? amendedArguments, CancellationToken cancellationToken)
     {
-        ApprovalSet = approved;
+        if (invocationId != InvocationId)
+            throw new InvalidOperationException("Unexpected native invocation id.");
+        Interlocked.Increment(ref _state.ApprovalDecisionCount);
+        _state.LastApprovalApproved = approved;
+        Guid chatId = Chats.Keys.Single();
+        _state.LatestRun = Snapshot(chatId, AgentRunStatuses.Paused);
         return Task.CompletedTask;
     }
 
     public Task CancelRunAsync(Guid runId, CancellationToken cancellationToken)
     {
-        Cancelled = true;
+        _state.Cancelled = true;
+        if (Chats.Count == 1)
+            _state.LatestRun = Snapshot(Chats.Keys.Single(), AgentRunStatuses.Cancelled);
         return Task.CompletedTask;
     }
 
@@ -188,18 +233,28 @@ internal sealed class FakeNativeRuntime : ITlahNativeRuntime
     }
 
     private AgentRunSnapshot Snapshot(Guid chatId, string status) =>
-        new(RunId, chatId, Guid.NewGuid(), status, 1, 48, null, 0,
-            status == AgentRunStatuses.AwaitingApproval ? new ToolInvocationSnapshot(InvocationId, "file_write", "{}", ToolInvocationStatuses.AwaitingApproval) : null);
+        new(RunId, chatId, _state.NativeTurnId, status, 1, 48, null, 0,
+            status == AgentRunStatuses.AwaitingApproval
+                ? new ToolInvocationSnapshot(
+                    InvocationId,
+                    "file_write",
+                    "{\"path\":\"a.txt\"}",
+                    ToolInvocationStatuses.AwaitingApproval,
+                    "write",
+                    "Writes the requested file.",
+                    "{\"level\":\"write\"}")
+                : null);
 
     private SendMessageResult Result(Guid chatId, Message user, Message assistant, string status)
     {
         var turn = new Turn { ChatId = chatId };
         user.TurnId = turn.Id;
         assistant.TurnId = turn.Id;
+        _state.LatestRun = Snapshot(chatId, status);
         return new SendMessageResult(turn, user, assistant,
             new RawRequest { TurnId = turn.Id },
             new RawResponse { TurnId = turn.Id, TokenUsageJson = "{\"input_tokens\":12,\"output_tokens\":4}" },
-            Snapshot(chatId, status));
+            _state.LatestRun);
     }
 }
 
@@ -207,13 +262,19 @@ internal static class AdapterTestFactory
 {
     public static async Task<(TlahKernelAdapter Adapter, SessionRef Session)> CreateAsync(FakeNativeRuntime runtime, string root)
     {
-        var adapter = new TlahKernelAdapter(runtime);
-        var profile = new KernelProfile("test-profile", TlahKernelAdapter.Id, "Test", root, new Dictionary<string, string>(), true);
-        await adapter.InitializeAsync(new KernelInitializationContext("1.0.0", profile, root, root, false));
+        TlahKernelAdapter adapter = await InitializeAsync(runtime, root);
         string workspace = System.IO.Path.Combine(root, "workspace");
         Directory.CreateDirectory(workspace);
         var created = await adapter.CreateSessionAsync(new CreateSessionRequest(
             new WorkspaceDescriptor("workspace", workspace, [], true), "Test chat", null, null));
         return (adapter, created.Session);
+    }
+
+    public static async Task<TlahKernelAdapter> InitializeAsync(FakeNativeRuntime runtime, string root)
+    {
+        var adapter = new TlahKernelAdapter(runtime);
+        var profile = new KernelProfile("test-profile", TlahKernelAdapter.Id, "Test", root, new Dictionary<string, string>(), true);
+        await adapter.InitializeAsync(new KernelInitializationContext("1.0.0", profile, root, root, false));
+        return adapter;
     }
 }
