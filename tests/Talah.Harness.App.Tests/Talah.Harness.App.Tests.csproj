@@ -15,4 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Talah.Harness.App\Talah.Harness.App.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\src\Talah.Harness.App\MainWindow.xaml" Link="TestAssets\MainWindow.xaml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Talah.Harness.App.Models;
 using Talah.Harness.App.Services;
 using Talah.Harness.Adapters.OpenCode;
@@ -11,6 +12,27 @@ namespace Talah.Harness.App.Tests;
 
 public sealed class StateProjectionTests
 {
+    [Fact]
+    public void ResponsiveLayoutHostUsesTheDpiAwareSizeHandlerWithoutFrameworkAdaptiveTriggers()
+    {
+        XDocument document = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "TestAssets", "MainWindow.xaml"));
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement host = document.Descendants().Single(element =>
+            element.Name.LocalName == "UserControl" && (string?)element.Attribute(xaml + "Name") == "LayoutStateHost");
+        Assert.Equal("LayoutStateHost_SizeChanged", (string?)host.Attribute("SizeChanged"));
+        Assert.DoesNotContain(document.Descendants(), element => element.Name.LocalName == "AdaptiveTrigger");
+    }
+
+    [Theory]
+    [InlineData(0, ResponsiveLayoutBand.Narrow)]
+    [InlineData(759.99, ResponsiveLayoutBand.Narrow)]
+    [InlineData(760, ResponsiveLayoutBand.Medium)]
+    [InlineData(1179.99, ResponsiveLayoutBand.Medium)]
+    [InlineData(1180, ResponsiveLayoutBand.Wide)]
+    [InlineData(4096, ResponsiveLayoutBand.Wide)]
+    public void ResponsiveLayoutPolicySelectsContiguousEffectiveWidthBands(double width, ResponsiveLayoutBand expected) =>
+        Assert.Equal(expected, ResponsiveLayoutPolicy.SelectBand(width));
+
     [Fact]
     public void ToolArgumentsRedactSensitivePropertiesAndNestedText()
     {

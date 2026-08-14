@@ -8,80 +8,12 @@
     mc:Ignorable="d"
     Title="Talah Harness">
 
-  <Grid x:Name="RootGrid" Background="{StaticResource CanvasBrush}" Loaded="RootGrid_Loaded">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="52" />
-      <RowDefinition Height="*" />
-    </Grid.RowDefinitions>
-    <VisualStateManager.VisualStateGroups>
-      <VisualStateGroup x:Name="AdaptiveLayoutStates">
-        <VisualState x:Name="NarrowLayout">
-          <VisualState.Setters>
-            <Setter Target="TitleIdentityColumn.Width" Value="190" />
-            <Setter Target="KernelRunway.Visibility" Value="Collapsed" />
-            <Setter Target="SessionColumn.Width" Value="0" />
-            <Setter Target="SessionSeparatorColumn.Width" Value="0" />
-            <Setter Target="InspectorSeparatorColumn.Width" Value="0" />
-            <Setter Target="InspectorColumn.Width" Value="0" />
-            <Setter Target="SessionPane.Visibility" Value="Collapsed" />
-            <Setter Target="SessionSeparator.Visibility" Value="Collapsed" />
-            <Setter Target="InspectorSeparator.Visibility" Value="Collapsed" />
-            <Setter Target="InspectorPane.Visibility" Value="Collapsed" />
-            <Setter Target="OnboardingArtColumn.Width" Value="0" />
-            <Setter Target="OnboardingContentColumn.Width" Value="*" />
-            <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
-            <Setter Target="OnboardingCard.Margin" Value="12" />
-            <Setter Target="OnboardingContent.Padding" Value="20" />
-            <Setter Target="OnboardingActions.Orientation" Value="Vertical" />
-            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Stretch" />
-          </VisualState.Setters>
-        </VisualState>
-        <VisualState x:Name="MediumLayout">
-          <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="760" /></VisualState.StateTriggers>
-          <VisualState.Setters>
-            <Setter Target="TitleIdentityColumn.Width" Value="240" />
-            <Setter Target="KernelRunway.Visibility" Value="Collapsed" />
-            <Setter Target="SessionColumn.Width" Value="240" />
-            <Setter Target="SessionSeparatorColumn.Width" Value="1" />
-            <Setter Target="InspectorSeparatorColumn.Width" Value="0" />
-            <Setter Target="InspectorColumn.Width" Value="0" />
-            <Setter Target="SessionPane.Visibility" Value="Visible" />
-            <Setter Target="SessionSeparator.Visibility" Value="Visible" />
-            <Setter Target="InspectorSeparator.Visibility" Value="Collapsed" />
-            <Setter Target="InspectorPane.Visibility" Value="Collapsed" />
-            <Setter Target="OnboardingArtColumn.Width" Value="0" />
-            <Setter Target="OnboardingContentColumn.Width" Value="*" />
-            <Setter Target="OnboardingImage.Visibility" Value="Collapsed" />
-            <Setter Target="OnboardingCard.Margin" Value="24" />
-            <Setter Target="OnboardingContent.Padding" Value="30" />
-            <Setter Target="OnboardingActions.Orientation" Value="Horizontal" />
-            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Right" />
-          </VisualState.Setters>
-        </VisualState>
-        <VisualState x:Name="WideLayout">
-          <VisualState.StateTriggers><AdaptiveTrigger MinWindowWidth="1180" /></VisualState.StateTriggers>
-          <VisualState.Setters>
-            <Setter Target="TitleIdentityColumn.Width" Value="296" />
-            <Setter Target="KernelRunway.Visibility" Value="Visible" />
-            <Setter Target="SessionColumn.Width" Value="296" />
-            <Setter Target="SessionSeparatorColumn.Width" Value="1" />
-            <Setter Target="InspectorSeparatorColumn.Width" Value="1" />
-            <Setter Target="InspectorColumn.Width" Value="344" />
-            <Setter Target="SessionPane.Visibility" Value="Visible" />
-            <Setter Target="SessionSeparator.Visibility" Value="Visible" />
-            <Setter Target="InspectorSeparator.Visibility" Value="Visible" />
-            <Setter Target="InspectorPane.Visibility" Value="Visible" />
-            <Setter Target="OnboardingArtColumn.Width" Value="*" />
-            <Setter Target="OnboardingContentColumn.Width" Value="*" />
-            <Setter Target="OnboardingImage.Visibility" Value="Visible" />
-            <Setter Target="OnboardingCard.Margin" Value="36" />
-            <Setter Target="OnboardingContent.Padding" Value="34,30" />
-            <Setter Target="OnboardingActions.Orientation" Value="Horizontal" />
-            <Setter Target="OnboardingActions.HorizontalAlignment" Value="Right" />
-          </VisualState.Setters>
-        </VisualState>
-      </VisualStateGroup>
-    </VisualStateManager.VisualStateGroups>
+  <UserControl x:Name="LayoutStateHost" SizeChanged="LayoutStateHost_SizeChanged">
+    <Grid x:Name="RootGrid" Background="{StaticResource CanvasBrush}" Loaded="RootGrid_Loaded">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="52" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
 
     <!-- Extended title bar / kernel runway -->
     <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource SubtleBorderBrush}" BorderThickness="0,0,0,1">
@@ -469,6 +401,7 @@
         </Grid>
       </Border>
     </Grid>
-  </Grid>
+    </Grid>
+  </UserControl>
 </Window>
 

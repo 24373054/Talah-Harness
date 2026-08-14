@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -60,7 +61,29 @@ public sealed partial class MainWindow : Window
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
         _appWindow = AppWindow.GetFromWindowId(windowId);
         _appWindow.Closing += AppWindow_Closing;
-        _appWindow.Resize(new SizeInt32(1480, 920));
+        DisplayArea? displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Primary);
+        double rasterizationScale = Math.Max(GetDpiForWindow(windowHandle) / 96d, 1d);
+        if (displayArea is not null)
+        {
+            RectInt32 workArea = displayArea.WorkArea;
+            int width = Math.Min(
+                (int)Math.Round(1480 * rasterizationScale),
+                Math.Max(640, (int)Math.Floor(workArea.Width * 0.94)));
+            int height = Math.Min(
+                (int)Math.Round(920 * rasterizationScale),
+                Math.Max(560, (int)Math.Floor(workArea.Height * 0.90)));
+            _appWindow.MoveAndResize(new RectInt32(
+                workArea.X + ((workArea.Width - width) / 2),
+                workArea.Y + ((workArea.Height - height) / 2),
+                width,
+                height));
+        }
+        else
+        {
+            _appWindow.Resize(new SizeInt32(
+                (int)Math.Round(1480 * rasterizationScale),
+                (int)Math.Round(920 * rasterizationScale)));
+        }
         string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
         if (File.Exists(iconPath)) _appWindow.SetIcon(iconPath);
         if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
@@ -69,6 +92,7 @@ public sealed partial class MainWindow : Window
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
+        ApplyResponsiveLayout(LayoutStateHost.ActualWidth);
         if (_isBusy) return;
         await RunOperationAsync(async () =>
         {
@@ -87,6 +111,82 @@ public sealed partial class MainWindow : Window
             }
         }, "Harness startup");
     }
+
+    private void LayoutStateHost_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        ApplyResponsiveLayout(e.NewSize.Width);
+
+    private void ApplyResponsiveLayout(double fallbackWidth)
+    {
+        if (TitleIdentityColumn is null || OnboardingActions is null)
+            return;
+        double rasterizationScale = Math.Max(LayoutStateHost.XamlRoot?.RasterizationScale ?? 1d, 1d);
+        double effectiveWidth = _appWindow is null
+            ? fallbackWidth
+            : _appWindow.ClientSize.Width / rasterizationScale;
+        switch (ResponsiveLayoutPolicy.SelectBand(effectiveWidth))
+        {
+            case ResponsiveLayoutBand.Narrow:
+                TitleIdentityColumn.Width = new GridLength(190);
+                KernelRunway.Visibility = Visibility.Collapsed;
+                SessionColumn.Width = new GridLength(0);
+                SessionSeparatorColumn.Width = new GridLength(0);
+                InspectorSeparatorColumn.Width = new GridLength(0);
+                InspectorColumn.Width = new GridLength(0);
+                SessionPane.Visibility = Visibility.Collapsed;
+                SessionSeparator.Visibility = Visibility.Collapsed;
+                InspectorSeparator.Visibility = Visibility.Collapsed;
+                InspectorPane.Visibility = Visibility.Collapsed;
+                OnboardingArtColumn.Width = new GridLength(0);
+                OnboardingContentColumn.Width = new GridLength(1, GridUnitType.Star);
+                OnboardingImage.Visibility = Visibility.Collapsed;
+                OnboardingCard.Margin = new Thickness(12);
+                OnboardingContent.Padding = new Thickness(20);
+                OnboardingActions.Orientation = Orientation.Vertical;
+                OnboardingActions.HorizontalAlignment = HorizontalAlignment.Stretch;
+                break;
+            case ResponsiveLayoutBand.Medium:
+                TitleIdentityColumn.Width = new GridLength(240);
+                KernelRunway.Visibility = Visibility.Collapsed;
+                SessionColumn.Width = new GridLength(240);
+                SessionSeparatorColumn.Width = new GridLength(1);
+                InspectorSeparatorColumn.Width = new GridLength(0);
+                InspectorColumn.Width = new GridLength(0);
+                SessionPane.Visibility = Visibility.Visible;
+                SessionSeparator.Visibility = Visibility.Visible;
+                InspectorSeparator.Visibility = Visibility.Collapsed;
+                InspectorPane.Visibility = Visibility.Collapsed;
+                OnboardingArtColumn.Width = new GridLength(0);
+                OnboardingContentColumn.Width = new GridLength(1, GridUnitType.Star);
+                OnboardingImage.Visibility = Visibility.Collapsed;
+                OnboardingCard.Margin = new Thickness(24);
+                OnboardingContent.Padding = new Thickness(30);
+                OnboardingActions.Orientation = Orientation.Horizontal;
+                OnboardingActions.HorizontalAlignment = HorizontalAlignment.Right;
+                break;
+            case ResponsiveLayoutBand.Wide:
+                TitleIdentityColumn.Width = new GridLength(296);
+                KernelRunway.Visibility = Visibility.Visible;
+                SessionColumn.Width = new GridLength(296);
+                SessionSeparatorColumn.Width = new GridLength(1);
+                InspectorSeparatorColumn.Width = new GridLength(1);
+                InspectorColumn.Width = new GridLength(344);
+                SessionPane.Visibility = Visibility.Visible;
+                SessionSeparator.Visibility = Visibility.Visible;
+                InspectorSeparator.Visibility = Visibility.Visible;
+                InspectorPane.Visibility = Visibility.Visible;
+                OnboardingArtColumn.Width = new GridLength(1, GridUnitType.Star);
+                OnboardingContentColumn.Width = new GridLength(1, GridUnitType.Star);
+                OnboardingImage.Visibility = Visibility.Visible;
+                OnboardingCard.Margin = new Thickness(36);
+                OnboardingContent.Padding = new Thickness(34, 30, 34, 30);
+                OnboardingActions.Orientation = Orientation.Horizontal;
+                OnboardingActions.HorizontalAlignment = HorizontalAlignment.Right;
+                break;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(nint windowHandle);
 
     private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
