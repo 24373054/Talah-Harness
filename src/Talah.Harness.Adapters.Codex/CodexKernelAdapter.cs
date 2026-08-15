@@ -6,7 +6,7 @@ using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.Codex;
 
-public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
+public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter, ICredentialChangeRequiresRestart
 {
     public const string CodexAdapterId = "codex";
     private readonly KernelProfile _profile;
@@ -36,6 +36,8 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
     }
 
     public string AdapterId => CodexAdapterId;
+
+    public bool RequiresRestartAfterCredentialChange => true;
 
     public KernelDescriptor Descriptor => new(
         AdapterId,
@@ -135,6 +137,16 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
     public async Task<AuthenticationState> GetAuthenticationStateAsync(CancellationToken cancellationToken = default)
     {
         EnsureReady();
+        if (await HasDeepSeekCredentialAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return new AuthenticationState(
+                AuthenticationStatus.SignedIn,
+                "deepseek",
+                "DeepSeek V4",
+                SupportedAuthenticationMethods,
+                "DeepSeek provider is configured with a DPAPI-protected external API key.");
+        }
+
         JsonElement result = await _client.RequestAsync("account/read", new { refreshToken = false }, cancellationToken)
             .ConfigureAwait(false);
         if (!result.TryGetProperty("account", out JsonElement account) || account.ValueKind == JsonValueKind.Null)
@@ -198,20 +210,41 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
     public async Task ConfigureApiKeyAsync(ApiKeyCredential credential, CancellationToken cancellationToken = default)
     {
         EnsureReady();
-        if (!string.Equals(credential.ProviderId, "openai", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new NotSupportedException("Pinned Codex schema supports host API-key configuration only for provider 'openai'.");
-        }
-
-        if (credential.BaseUri is not null || credential.Options is { Count: > 0 })
-        {
-            throw new NotSupportedException("Custom provider/base-URI configuration is not exposed by this adapter.");
-        }
-
         if (string.IsNullOrWhiteSpace(credential.Secret))
         {
             throw new ArgumentException("API key cannot be empty.", nameof(credential));
         }
+
+        if (string.Equals(credential.ProviderId, CodexDeepSeekConfiguration.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            ValidateDeepSeekEndpoint(credential.BaseUri);
+            CodexDeepSeekConfiguration.NormalizeModel(GetOption(credential, "model"));
+            DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(_profile);
+            await credentials.SetAsync(
+                _profile.AdapterId,
+                _profile.ProfileId,
+                ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+                credential.Secret,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!string.Equals(credential.ProviderId, "openai", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new NotSupportedException("Pinned Codex schema supports API keys for provider 'openai' and the first-party DeepSeek model-provider configuration.");
+        }
+
+        if (credential.BaseUri is not null || credential.Options is { Count: > 0 })
+        {
+            throw new NotSupportedException("Custom provider/base-URI configuration is not exposed by the Codex adapter.");
+        }
+
+        DpapiCredentialStore deepSeekCredentials = ProfileCredentialStore.ForProfile(_profile);
+        await deepSeekCredentials.DeleteAsync(
+            _profile.AdapterId,
+            _profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false);
 
         await _client.RequestAsync(
             "account/login/start",
@@ -222,12 +255,25 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
     public async Task LogoutAsync(CancellationToken cancellationToken = default)
     {
         EnsureReady();
+        DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(_profile);
+        bool removed = await credentials.DeleteAsync(
+            _profile.AdapterId,
+            _profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false);
+        if (removed) return;
+
         await _client.RequestAsync("account/logout", new { }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<KernelModel>> ListModelsAsync(CancellationToken cancellationToken = default)
     {
         EnsureReady();
+        if (await HasDeepSeekCredentialAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return ReadDeepSeekModelCatalog();
+        }
+
         var models = new List<KernelModel>();
         string? cursor = null;
         do
@@ -1014,6 +1060,67 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
         EmitDiagnostic("CODEX_STDIO", DiagnosticSeverity.Warning, message, empty);
     }
 
+    private async Task<bool> HasDeepSeekCredentialAsync(CancellationToken cancellationToken)
+    {
+        DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(_profile);
+        return !string.IsNullOrEmpty(await credentials.GetAsync(
+            _profile.AdapterId,
+            _profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false));
+    }
+
+    private static string? GetOption(ApiKeyCredential credential, string name) =>
+        credential.Options is not null && credential.Options.TryGetValue(name, out string? value) ? value : null;
+
+    private static void ValidateDeepSeekEndpoint(Uri? baseUri)
+    {
+        if (baseUri is null) return;
+        string value = baseUri.AbsoluteUri.TrimEnd('/');
+        if (string.Equals(value, "https://api.deepseek.com", StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException("Codex DeepSeek integration uses the official endpoint https://api.deepseek.com. Custom DeepSeek base URIs are not enabled for this release.");
+    }
+
+    private IReadOnlyList<KernelModel> ReadDeepSeekModelCatalog()
+    {
+        try
+        {
+            string catalog = ReadEmbeddedDeepSeekCatalog();
+            using JsonDocument document = JsonDocument.Parse(catalog);
+            if (!document.RootElement.TryGetProperty("models", out JsonElement entries) || entries.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("DeepSeek Codex model catalog does not contain a models array.");
+            var models = new List<KernelModel>();
+            foreach (JsonElement entry in entries.EnumerateArray())
+            {
+                string id = entry.TryGetProperty("slug", out JsonElement slug) ? slug.GetString() ?? string.Empty : string.Empty;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+                models.Add(new KernelModel(
+                    id,
+                    entry.TryGetProperty("display_name", out JsonElement display) ? display.GetString() ?? id : id,
+                    entry.TryGetProperty("description", out JsonElement description) ? description.GetString() : null,
+                    string.Equals(id, CodexDeepSeekConfiguration.DefaultModel, StringComparison.Ordinal),
+                    new Dictionary<string, string>
+                    {
+                        ["provider"] = CodexDeepSeekConfiguration.ProviderId,
+                        ["defaultReasoningEffort"] = entry.TryGetProperty("default_reasoning_level", out JsonElement effort) ? effort.GetString() ?? string.Empty : string.Empty
+                    }));
+            }
+            return models;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidDataException)
+        {
+            throw new InvalidDataException("The pinned DeepSeek Codex model catalog is invalid.", exception);
+        }
+    }
+
+    private static string ReadEmbeddedDeepSeekCatalog()
+    {
+        using Stream stream = typeof(CodexDeepSeekConfiguration).Assembly.GetManifestResourceStream(CodexDeepSeekConfiguration.CatalogResourceName)
+            ?? throw new InvalidDataException($"Embedded Codex DeepSeek model catalog '{CodexDeepSeekConfiguration.CatalogResourceName}' is missing.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private void EnsureReady()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -1165,7 +1272,10 @@ public sealed class CodexKernelAdapter : IKernelAdapter, ISessionRenameAdapter
             : null;
 
     private static long? GetInt64(JsonElement value, string name) =>
-        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) && property.TryGetInt64(out long result)
+        value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty(name, out JsonElement property) &&
+        property.ValueKind == JsonValueKind.Number &&
+        property.TryGetInt64(out long result)
             ? result
             : null;
 

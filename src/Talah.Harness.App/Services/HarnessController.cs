@@ -238,11 +238,21 @@ public sealed class HarnessController : IAsyncDisposable
     public Task CancelLoginAsync(string adapterId, string loginId, CancellationToken cancellationToken = default) =>
         _host.CancelLoginAsync(RequireProfile(adapterId, operational: true).Key, loginId, cancellationToken);
 
-    public Task ConfigureApiKeyAsync(string adapterId, ApiKeyCredential credential, CancellationToken cancellationToken = default) =>
-        _host.ConfigureApiKeyAsync(RequireProfile(adapterId, operational: true).Key, credential, cancellationToken);
+    public async Task ConfigureApiKeyAsync(string adapterId, ApiKeyCredential credential, CancellationToken cancellationToken = default)
+    {
+        ProfileRuntimeState profile = RequireProfile(adapterId, operational: true);
+        await _host.ConfigureApiKeyAsync(profile.Key, credential, cancellationToken).ConfigureAwait(false);
+        if (RequiresCredentialRestart(adapterId))
+            await RestartProfileAsync(profile, cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task LogoutAsync(string adapterId, CancellationToken cancellationToken = default) =>
-        _host.LogoutAsync(RequireProfile(adapterId, operational: true).Key, cancellationToken);
+    public async Task LogoutAsync(string adapterId, CancellationToken cancellationToken = default)
+    {
+        ProfileRuntimeState profile = RequireProfile(adapterId, operational: true);
+        await _host.LogoutAsync(profile.Key, cancellationToken).ConfigureAwait(false);
+        if (RequiresCredentialRestart(adapterId))
+            await RestartProfileAsync(profile, cancellationToken).ConfigureAwait(false);
+    }
 
     public Task RespondToPermissionAsync(string adapterId, PermissionResponse response, CancellationToken cancellationToken = default) =>
         _host.RespondToPermissionAsync(RequireProfile(adapterId, operational: true).Key, response, cancellationToken);
@@ -316,6 +326,26 @@ public sealed class HarnessController : IAsyncDisposable
         }
     }
 
+    private static bool RequiresCredentialRestart(string adapterId) =>
+        string.Equals(adapterId, CodexKernelAdapter.CodexAdapterId, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(adapterId, OpenCodeAdapter.Id, StringComparison.OrdinalIgnoreCase);
+
+    private async Task RestartProfileAsync(ProfileRuntimeState profile, CancellationToken cancellationToken)
+    {
+        await _host.StopProfileAsync(profile.Key, cancellationToken).ConfigureAwait(false);
+        HostedKernelSnapshot snapshot = await _host.StartProfileAsync(
+            profile.Profile,
+            HostVersion,
+            _logRoot,
+            _schemaRoot,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        Profiles = Profiles.Select(state =>
+            string.Equals(state.Profile.AdapterId, profile.Profile.AdapterId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(state.Profile.ProfileId, profile.Profile.ProfileId, StringComparison.OrdinalIgnoreCase)
+                ? state with { Snapshot = snapshot, StartupFailure = null }
+                : state).ToArray();
+    }
+
     private ProfileRuntimeState RequireProfile(string adapterId, bool operational)
     {
         EnsureInitialized();
@@ -327,12 +357,21 @@ public sealed class HarnessController : IAsyncDisposable
         return profile;
     }
 
-    private IReadOnlyList<KernelProfile> CreateDefaultProfiles() =>
-    [
-        new("default", "codex", "Codex", Path.Combine(ProductRoot, "profiles", "codex", "default"), new Dictionary<string, string>(), true),
-        new("default", "opencode", "OpenCode", Path.Combine(ProductRoot, "profiles", "opencode", "default"), new Dictionary<string, string>(), true),
-        new("default", "tlah", "TLAH", Path.Combine(ProductRoot, "profiles", "tlah", "default"), new Dictionary<string, string>(), true)
-    ];
+    private IReadOnlyList<KernelProfile> CreateDefaultProfiles()
+    {
+        string codexPath = Path.Combine(AppContext.BaseDirectory, "kernels", "codex", "codex.exe");
+        string openCodePath = Path.Combine(AppContext.BaseDirectory, "kernels", "opencode", "opencode.exe");
+        var codexEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var openCodeEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(codexPath)) codexEnvironment["TALAH_CODEX_PATH"] = codexPath;
+        if (File.Exists(openCodePath)) openCodeEnvironment["OPENCODE_EXECUTABLE"] = openCodePath;
+        return
+        [
+            new("default", "codex", "Codex", Path.Combine(ProductRoot, "profiles", "codex", "default"), codexEnvironment, true),
+            new("default", "opencode", "OpenCode", Path.Combine(ProductRoot, "profiles", "opencode", "default"), openCodeEnvironment, true),
+            new("default", "tlah", "TLAH", Path.Combine(ProductRoot, "profiles", "tlah", "default"), new Dictionary<string, string>(), true)
+        ];
+    }
 
     private void RestoreWorkspace(HarnessSettings settings)
     {

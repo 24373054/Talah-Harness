@@ -1,0 +1,12 @@
+* text=auto
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.msix binary
+*.pfx binary
+*.cer binary
+*.db binary

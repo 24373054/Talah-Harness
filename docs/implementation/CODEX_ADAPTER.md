@@ -46,7 +46,7 @@ original JSON ID.
 | Text/reasoning/plan/command/file/diff/subagent/usage events | Yes | v2 notifications, with sanitized vendor JSON retained |
 | Read diff | Yes | latest `turn/diff/updated` state; `null` when App Server has not emitted a diff |
 | Amend approval input | No | Host amendment is generic, while Codex 0.147.0 uses operation-specific amendment unions |
-| Configure arbitrary providers | No | The adapter accepts only the schema-defined OpenAI API-key login shape |
+| Configure arbitrary providers | No | The adapter accepts the schema-defined OpenAI API-key login and the first-party Codex DeepSeek model-provider configuration (`model_providers.deepseek`, `wire_api = "responses"`, `env_key`) |
 | Configure MCP servers | No | Configuration is intentionally outside the adapter contract implementation |
 | Replay past events | No | The protocol stream is live; persisted replay is a host responsibility |
 
@@ -59,6 +59,9 @@ approval/sandbox modes, and unsupported input content throw
 - Secrets are never placed in process arguments. The process command line is
   fixed to `app-server --stdio`; credentials travel only inside the stdio
   protocol request that defines them.
+- DeepSeek keys are DPAPI-protected by the host and injected only through
+  `DEEPSEEK_API_KEY` in the isolated Codex process environment; they are never
+  written to `config.toml`.
 - API keys, access/refresh tokens, bearer values, and secret-like vendor fields
   are redacted before diagnostics or vendor JSON reach host events.
 - Stdout and stderr are consumed independently. Stderr becomes a redacted

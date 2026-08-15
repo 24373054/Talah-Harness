@@ -42,6 +42,23 @@ catch { Add-Failure "Unable to parse the app project: $($_.Exception.Message)" }
 $solutionPath = Join-Path $RepositoryRoot 'Talah.Harness.sln'
 $solutionContent = Get-Content -LiteralPath $solutionPath -Raw
 $releaseDriver = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'tools\release\Build-Release.ps1') -Raw
+
+$kernelRestore = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'tools\release\Restore-KernelRuntimes.ps1') -Raw
+foreach ($expected in @('299d8603750caaffc24f218789d989f77cf157070bd42451d352f5578a800766', '1becf92ceb23edd7d951e7e3d8efcbe9c9808f5cc728f1b75277d5f951ada5c2')) {
+    if (-not $kernelRestore.Contains($expected, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "Pinned kernel runtime provenance is missing: $expected"
+    }
+}
+foreach ($expected in @('kernels\codex', 'kernels\opencode')) {
+    if (-not $releaseDriver.Contains($expected, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "Kernel runtime staging is missing from the release driver: $expected"
+    }
+}
+$controllerSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'src\Talah.Harness.App\Services\HarnessController.cs') -Raw
+if (-not $controllerSource.Contains('"kernels"', [StringComparison]::OrdinalIgnoreCase)) {
+    Add-Failure 'The desktop controller does not discover the bundled kernel runtimes.'
+}
+
 if ($releaseDriver -notmatch "(?m)ArgumentList\s+@\('restore'.*'--maxcpucount:1'") {
     Add-Failure 'Release restore is not bounded to a single MSBuild node.'
 }
@@ -94,14 +111,14 @@ $submoduleEntry = Get-GitValue -RepositoryRoot $RepositoryRoot -Arguments @('ls-
 if ($submoduleEntry -notmatch '^160000 commit [0-9a-f]{40}\s+third_party/TLAH-Studio$') {
     Add-Failure 'TLAH Studio is not pinned as a Git submodule in HEAD.'
 }
-$submoduleDiff = & git -C $RepositoryRoot diff --submodule=diff --exit-code -- third_party/TLAH-Studio 2>&1
-if ($LASTEXITCODE -ne 0) { Add-Failure "TLAH Studio submodule pin has local changes: $submoduleDiff" }
+$submoduleDiff = & git -c core.autocrlf=true -C $RepositoryRoot diff --submodule=diff --exit-code -- third_party/TLAH-Studio 2>&1
+if ($LASTEXITCODE -ne 0) { Add-Failure "TLAH Studio submodule pin has semantic local changes: $submoduleDiff" }
 $submodulePath = Join-Path $RepositoryRoot 'third_party\TLAH-Studio'
 if (Test-Path -LiteralPath $submodulePath) {
     $expectedPin = ($submoduleEntry -split '\s+')[2]
     $actualPin = (& git -C $submodulePath rev-parse HEAD 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $actualPin -ne $expectedPin) { Add-Failure "TLAH Studio checkout is not at pinned commit $expectedPin." }
-    $submoduleStatus = (& git -C $submodulePath status --porcelain --untracked-files=normal 2>&1 | Out-String).Trim()
+    $submoduleStatus = (& git -c core.autocrlf=true -C $submodulePath status --porcelain --untracked-files=normal 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $submoduleStatus) { Add-Failure "TLAH Studio checkout is not clean: $submoduleStatus" }
 }
 

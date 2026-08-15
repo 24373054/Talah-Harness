@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Talah.Harness.Contracts;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.Codex.Tests;
 
@@ -42,6 +43,55 @@ public sealed class CodexKernelAdapterTests
         Assert.Equal(["workspace-write", "read-only", "danger-full-access"],
             adapter.Descriptor.Security.SandboxPolicies!.Select(option => option.Value));
     }
+
+    [Fact]
+    public async Task DeepSeekApiKeyIsDpapiProtectedAndDoesNotUseOpenAiLogin()
+
+    {
+
+        var calls = new List<string>();
+
+        var fixture = await TestSupport.CreateInitializedAdapterAsync((method, _) =>
+
+        {
+
+            calls.Add(method);
+
+            return new { };
+
+        });
+
+        await using var adapter = fixture.Adapter;
+
+        const string secret = "sk-deepseek-test-secret";
+
+        await adapter.ConfigureApiKeyAsync(new ApiKeyCredential("deepseek", secret));
+
+        Assert.DoesNotContain(calls, call => call == "account/login/start");
+
+
+        string credentialRoot = Path.Combine(Path.GetFullPath(TestSupport.Profile.DataRoot), ".credentials");
+
+        string credentialPath = Path.Combine(credentialRoot, "deepseek-api-key.dpapi");
+
+        Assert.True(File.Exists(credentialPath));
+
+        string protectedText = await File.ReadAllTextAsync(credentialPath);
+
+        Assert.DoesNotContain(secret, protectedText, StringComparison.Ordinal);
+
+        await adapter.LogoutAsync();
+        Assert.DoesNotContain(calls, call => call == "account/logout");
+
+
+
+        DpapiCredentialStore credentials = new(credentialRoot);
+
+        Assert.Null(await credentials.GetAsync("codex", "test-profile", "deepseek-api-key"));
+
+    }
+
+
 
     [Fact]
     public async Task ModelsAndThreadLifecycleMapToHostContracts()

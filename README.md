@@ -12,6 +12,10 @@ The application owns the desktop experience, durable event projection,
 credential profiles, approvals, diagnostics, process lifecycle, and release
 identity. Each kernel keeps its native session, authentication, security, and
 tool semantics instead of being reduced to a lowest-common-denominator chatbot.
+Version 1.0.0 ships pinned Codex 0.147.0 and OpenCode 1.18.9 Windows x64
+runtimes inside the MSIX and connects all three kernels to DeepSeek through one
+external API key. See
+[`docs/implementation/DEEPSEEK_INTEGRATION.md`](docs/implementation/DEEPSEEK_INTEGRATION.md).
 
 ## Product status
 

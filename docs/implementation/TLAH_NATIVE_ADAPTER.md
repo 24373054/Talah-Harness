@@ -45,7 +45,7 @@ adapter validates containment before writing it.
 | --- | --- | --- |
 | Health | Resolve native provider catalog from the profile graph | No network request. |
 | Authentication state | `ISettingsService.IsConfiguredAsync` and masked settings | API-key configuration only. |
-| Configure/logout | `UpdateGlobalSettingsAsync` | `ProtectedSecret` protects the key with Windows DPAPI before SQLite persistence. |
+| Configure/logout | `UpdateGlobalSettingsAsync` | DeepSeek is a first-party native provider. `ProtectedSecret` protects the key with Windows DPAPI before SQLite persistence. |
 | Models | `ProviderModelCatalog.FallbackModels` for the configured provider | Stable native catalog; no paid/network discovery during listing. |
 | Create/list/get/archive | `IChatService` | Native chat GUID is the native session id. |
 | Resume session | `GetChatOrThrowAsync`, then `GetLatestAgentRunAsync` | Reconciles durable run status. An unanswered native approval is rebuilt with its original run, turn, and invocation GUIDs; reopening alone never starts or resumes model execution. |

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $SolutionPath,
-    [Parameter(Mandatory = $true)] [string] $OutputDirectory
+    [Parameter(Mandatory = $true)] [string] $OutputDirectory,
+    [Parameter()] [object[]] $AdditionalComponents = @()
 )
 
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
@@ -34,6 +35,27 @@ if ($sbom.PSObject.Properties.Name -contains 'serialNumber') {
 if ($sbom.PSObject.Properties.Name -contains 'metadata') {
     $sbom.metadata.timestamp = $sourceDate.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
 }
+function Test-ComponentField {
+    param([object] $Component, [string] $Name)
+    if ($Component -is [System.Collections.IDictionary]) { return $Component.Contains($Name) }
+    return $Component.PSObject.Properties.Name -contains $Name
+}
+
+foreach ($component in $AdditionalComponents) {
+    $hashObject = [ordered]@{ alg = [string]$component.HashAlgorithm; content = [string]$component.HashValue }
+    $entry = [ordered]@{
+        type = [string]$component.Type
+        name = [string]$component.Name
+        version = [string]$component.Version
+        'bom-ref' = [string]$component.Name + '@' + [string]$component.Version
+        hashes = @($hashObject)
+    }
+    if ((Test-ComponentField -Component $component -Name 'Purl') -and $component.Purl) { $entry.purl = [string]$component.Purl }
+    if ((Test-ComponentField -Component $component -Name 'Description') -and $component.Description) { $entry.description = [string]$component.Description }
+    if ((Test-ComponentField -Component $component -Name 'License') -and $component.License) { $entry.licenses = @(@{ license = @{ name = [string]$component.License } }) }
+    $sbom.components += $entry
+}
+
 $canonicalSbom = $sbom | ConvertTo-Json -Depth 100
 [System.IO.File]::WriteAllText($sbomPath, $canonicalSbom + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 

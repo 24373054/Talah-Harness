@@ -49,6 +49,15 @@
     </ItemGroup>
     <Error Condition="'@(AppXamlArtifacts)' == ''" Text="WinUI publish output is missing compiled XAML resources." />
     <Copy SourceFiles="@(AppXamlArtifacts)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+
+    <PropertyGroup>
+      <_WinAppSdkResourcePackage>$(NuGetPackageRoot)microsoft.windowsappsdk.runtime\2.1.3\tools\MSIX\win10-x64\Microsoft.WindowsAppRuntime.2.msix</_WinAppSdkResourcePackage>
+      <_WinAppSdkResourceExtractDir>$([System.IO.Path]::GetFullPath('$(IntermediateOutputPath)WinAppSdkResources'))</_WinAppSdkResourceExtractDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_WinAppSdkResourceExtractDir)" />
+    <Exec Command="tar -xf &quot;$(_WinAppSdkResourcePackage)&quot; -C &quot;$(_WinAppSdkResourceExtractDir)&quot; resources.pri" />
+    <Copy SourceFiles="$(_WinAppSdkResourceExtractDir)\resources.pri" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)resources.pri')" Text="Windows App SDK resources.pri is missing from the self-contained publish output." />
   </Target>
 </Project>
 

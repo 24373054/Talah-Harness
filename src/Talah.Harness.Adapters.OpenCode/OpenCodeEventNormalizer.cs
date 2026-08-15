@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Talah.Harness.Contracts;
 
@@ -6,6 +7,7 @@ namespace Talah.Harness.Adapters.OpenCode;
 public sealed class OpenCodeEventNormalizer(string profileId)
 {
     private readonly string _profileId = profileId;
+    private readonly ConcurrentDictionary<string, string> _messageRoles = new(StringComparer.Ordinal);
     private long _sequence;
 
     public IReadOnlyList<KernelEvent> Normalize(OpenCodeSseEvent source)
@@ -54,10 +56,20 @@ public sealed class OpenCodeEventNormalizer(string profileId)
                         String(properties, "delta") ?? string.Empty));
                 break;
             case "message.part.updated":
-                if (part is JsonElement updated) AddPart(updated);
+                if (part is JsonElement updated)
+                {
+                    string? partMessageId = String(updated, "messageID");
+                    string partRole = partMessageId is not null && _messageRoles.TryGetValue(partMessageId, out string? knownRole)
+                        ? knownRole
+                        : "assistant";
+                    AddPart(updated, partRole);
+                }
                 break;
             case "message.updated":
                 JsonElement info = Element(properties, "info") ?? properties;
+                string? roleMessageId = String(info, "id");
+                string? role = String(info, "role");
+                if (roleMessageId is not null && role is not null) _messageRoles[roleMessageId] = role;
                 JsonElement? error = Element(info, "error");
                 if (error is not null) Add(KernelEventKind.TurnFailed, new TurnEventData(TurnStatus.Failed, Json(error.Value)));
                 AddUsage(info);
@@ -99,7 +111,7 @@ public sealed class OpenCodeEventNormalizer(string profileId)
                 Interlocked.Increment(ref _sequence), DateTimeOffset.UtcNow, kind, data, root.Clone(), nativeEventId));
         }
 
-        void AddPart(JsonElement value)
+        void AddPart(JsonElement value, string role)
         {
             string partType = String(value, "type") ?? "unknown";
             JsonElement? state = Element(value, "state");
@@ -110,11 +122,11 @@ public sealed class OpenCodeEventNormalizer(string profileId)
             switch (partType)
             {
                 case "text":
-                    kind = KernelItemKind.AssistantMessage;
+                    kind = role == "user" ? KernelItemKind.UserMessage : KernelItemKind.AssistantMessage;
                     content = new TextContentBlock(String(value, "text") ?? string.Empty);
                     break;
                 case "reasoning":
-                    kind = KernelItemKind.Reasoning;
+                    kind = role == "user" ? KernelItemKind.UserMessage : KernelItemKind.Reasoning;
                     content = new ReasoningContentBlock(String(value, "text") ?? string.Empty);
                     break;
                 case "tool":
@@ -223,10 +235,14 @@ public sealed class OpenCodeEventNormalizer(string profileId)
         => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out JsonElement property) ? property : null;
 
     private static long? Long(JsonElement value, string name)
-        => Element(value, name) is JsonElement item && item.TryGetInt64(out long number) ? number : null;
+        => Element(value, name) is JsonElement item && item.ValueKind == JsonValueKind.Number && item.TryGetInt64(out long number)
+            ? number
+            : null;
 
     private static decimal? Decimal(JsonElement value, string name)
-        => Element(value, name) is JsonElement item && item.TryGetDecimal(out decimal number) ? number : null;
+        => Element(value, name) is JsonElement item && item.ValueKind == JsonValueKind.Number && item.TryGetDecimal(out decimal number)
+            ? number
+            : null;
 
     internal static string Json(JsonElement value) => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();
 

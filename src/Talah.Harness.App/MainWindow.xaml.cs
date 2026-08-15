@@ -789,8 +789,14 @@ public sealed partial class MainWindow : Window
             states.FirstOrDefault(item => item.AdapterId == _controller.Settings.SelectedAdapterId) ?? states[0];
         var healthText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         var authText = new TextBlock { TextWrapping = TextWrapping.Wrap };
-        var providerBox = new TextBox { Header = "Provider ID", PlaceholderText = "Required for provider login or API key" };
-        var baseUriBox = new TextBox { Header = "Optional provider base URI", PlaceholderText = "https://…" };
+        var providerBox = new TextBox { Header = "Provider ID", Text = "deepseek", PlaceholderText = "deepseek, or openai for the official OpenAI login" };
+        var baseUriBox = new TextBox { Header = "Optional provider base URI", PlaceholderText = "https://api.deepseek.com (leave empty for the official DeepSeek endpoint)" };
+        var providerHelp = new TextBlock
+        {
+            Text = "DeepSeek uses provider id \"deepseek\". The API key is stored with Windows DPAPI, is injected only into the kernel process environment, and is never written to app settings, auth JSON, config.toml, logs, or diagnostics.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Microsoft.UI.Xaml.Application.Current.Resources["SecondaryTextBrush"]
+        };
         var secretBox = new PasswordBox { Header = "API key", PasswordRevealMode = PasswordRevealMode.Peek };
         AutomationProperties.SetName(secretBox, "Provider API key");
         var modelBox = new ComboBox { Header = "Model", MinWidth = 380, DisplayMemberPath = "DisplayName" };
@@ -798,7 +804,7 @@ public sealed partial class MainWindow : Window
         var logoutButton = new Button { Content = "Log out / remove provider auth", MinHeight = 44 };
         var setupButton = new Button { Content = "Show first-run guide", MinHeight = 44 };
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { refreshButton, logoutButton, setupButton } };
-        var content = new StackPanel { Spacing = 10, Children = { kernelBox, healthText, authText, providerBox, baseUriBox, secretBox, modelBox, actions } };
+        var content = new StackPanel { Spacing = 10, Children = { kernelBox, healthText, authText, providerHelp, providerBox, baseUriBox, secretBox, modelBox, actions } };
 
         async Task RefreshAsync()
         {

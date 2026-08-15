@@ -1,6 +1,7 @@
 using System.Net;
 using Talah.Harness.Adapters.OpenCode;
 using Talah.Harness.Contracts;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.OpenCode.Tests;
 
@@ -76,6 +77,33 @@ public sealed class OpenCodeProcessTests
 
         Assert.Contains("HTTPS", exception.Message, StringComparison.Ordinal);
         Assert.Equal(requestsBeforeCredential, handler.Requests.Count);
+        await adapter.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DeepSeekApiKeyIsDpapiProtectedAndDoesNotUseProviderAuthJson()
+    {
+        string credentialRoot = Path.Combine(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "talah-opencode-profile")), ".credentials");
+        string credentialPath = Path.Combine(credentialRoot, "deepseek-api-key.dpapi");
+        if (File.Exists(credentialPath)) File.Delete(credentialPath);
+
+        var process = new FakeProcess("OpenCode server listening on http://127.0.0.1:43123");
+        var handler = new RecordingHandler(_ => OpenCodeClientTests.Json("""{"healthy":true,"version":"1.18.9"}"""));
+        var adapter = new OpenCodeAdapter(new StubDiscovery(Compatible()), new FakeSupervisor(process), handler, TimeSpan.FromSeconds(1));
+        await adapter.InitializeAsync(Context());
+        int requestsBeforeCredential = handler.Requests.Count;
+        const string secret = "sk-opencode-deepseek-test-secret";
+
+        await adapter.ConfigureApiKeyAsync(new ApiKeyCredential("deepseek", secret));
+
+        Assert.Equal(requestsBeforeCredential, handler.Requests.Count);
+        Assert.True(File.Exists(credentialPath));
+        string protectedText = await File.ReadAllTextAsync(credentialPath);
+        Assert.DoesNotContain(secret, protectedText, StringComparison.Ordinal);
+
+        await adapter.LogoutAsync();
+        Assert.Equal(requestsBeforeCredential, handler.Requests.Count);
+        Assert.False(File.Exists(credentialPath));
         await adapter.DisposeAsync();
     }
 

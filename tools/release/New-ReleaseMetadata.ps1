@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $PackagePath,
     [Parameter(Mandatory = $true)] [string] $Publisher,
     [Parameter(Mandatory = $true)] [bool] $Signed,
+    [Parameter()] [ValidateSet('unsigned-development', 'self-signed-development', 'production-authenticode')] [string] $SigningLevel = 'production-authenticode',
     [Parameter()] [string] $UpdateBaseUri
 )
 
@@ -45,6 +46,7 @@ $updateMetadata = [ordered]@{
         sha256 = $packageHash
         sizeBytes = $packageInfo.Length
         signed = $Signed
+        signingLevel = $SigningLevel
     }
 }
 $updatePath = Join-Path $artifactPath 'update-manifest.json'
@@ -79,6 +81,7 @@ $provenance = [ordered]@{
     dependencyInventory = 'metadata/nuget-dependencies.json'
     rightsholderAuthorization = 'metadata/RIGHTSHOLDER_AUTHORIZATION.md'
     signing = if ($Signed) { 'Authenticode signed and timestamped' } else { 'UNSIGNED DEVELOPMENT ARTIFACT - NOT FOR PUBLIC DISTRIBUTION' }
+    signingLevel = $SigningLevel
 }
 $provenancePath = Join-Path $artifactPath 'provenance.json'
 [System.IO.File]::WriteAllText($provenancePath, ($provenance | ConvertTo-Json -Depth 8) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))

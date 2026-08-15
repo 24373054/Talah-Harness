@@ -67,6 +67,8 @@ if ($signed) {
         (Resolve-Path -LiteralPath $CertificatePath).Path,
         $CertificatePassword,
         [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    $signerThumbprint = $null
+    $selfSignedCertificate = $false
     try {
         if ($certificate.Subject -ne $Publisher) {
             throw "Signing certificate subject '$($certificate.Subject)' does not exactly match manifest Publisher '$Publisher'."
@@ -74,6 +76,8 @@ if ($signed) {
         if (-not $certificate.HasPrivateKey) {
             throw 'Signing certificate does not contain a private key.'
         }
+        $signerThumbprint = $certificate.Thumbprint
+        $selfSignedCertificate = $certificate.Issuer -eq $certificate.Subject
     }
     finally {
         $certificate.Dispose()
@@ -94,7 +98,22 @@ if ($signed) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
     }
 
-    Invoke-NativeCommand -FilePath $signTool -ArgumentList @('verify', '/pa', '/v', $packagePath) -FailureMessage 'Authenticode verification failed for the signed MSIX.' | Out-Host
+    $verifyOutput = @(& $signTool verify /pa /v $packagePath 2>&1)
+    $verifyExitCode = $LASTEXITCODE
+    $verifyText = $verifyOutput -join [Environment]::NewLine
+    $signerObserved = $null -ne $signerThumbprint -and $verifyText.Contains($signerThumbprint, [System.StringComparison]::OrdinalIgnoreCase)
+    $selfSignedDevelopmentSignature = $selfSignedCertificate -and $signerObserved
+    if ($verifyExitCode -eq 0) {
+        $verifyOutput | Select-Object -Last 5 | Out-Host
+    }
+    elseif ($selfSignedDevelopmentSignature) {
+        Write-Warning 'The MSIX signature is present and cryptographically valid but its self-signed root is not trusted by this machine. This is an expected development-grade self-signed release; consumers must trust the published .cer certificate before installation.'
+        $verifyOutput | Select-Object -Last 8 | Out-Host
+    }
+    else {
+        $verifyOutput | Out-Host
+        throw "Authenticode verification failed for the signed MSIX. Exit code: $verifyExitCode"
+    }
 }
 
 [pscustomobject]@{

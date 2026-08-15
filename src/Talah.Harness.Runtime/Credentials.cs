@@ -6,12 +6,26 @@ namespace Talah.Harness.Runtime;
 public sealed class DpapiCredentialStore
 {
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Talah.Harness.Credential.v1");
-    private readonly ProfilePathProvider _paths;
+    private readonly ProfilePathProvider? _paths;
+    private readonly string? _credentialRoot;
 
     public DpapiCredentialStore(ProfilePathProvider paths)
+        : this(paths, null)
+    {
+    }
+
+    public DpapiCredentialStore(string credentialRoot)
+        : this(null, credentialRoot)
+    {
+    }
+
+    private DpapiCredentialStore(ProfilePathProvider? paths, string? credentialRoot)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DPAPI CurrentUser credentials require Windows.");
-        _paths = paths ?? throw new ArgumentNullException(nameof(paths));
+        if (paths is null && string.IsNullOrWhiteSpace(credentialRoot))
+            throw new ArgumentException("A credential path provider or credential root is required.", nameof(paths));
+        _paths = paths;
+        _credentialRoot = string.IsNullOrWhiteSpace(credentialRoot) ? null : Path.GetFullPath(credentialRoot);
     }
 
     public async Task SetAsync(string adapterId, string profileId, string credentialId, string secret, CancellationToken cancellationToken = default)
@@ -83,8 +97,14 @@ public sealed class DpapiCredentialStore
         return Task.FromResult(true);
     }
 
-    private string GetPath(string adapterId, string profileId, string credentialId, bool create) =>
-        Path.Combine(_paths.GetCredentialRoot(adapterId, profileId, create), credentialId + ".dpapi");
+    private string GetPath(string adapterId, string profileId, string credentialId, bool create)
+    {
+        string root = _paths is not null
+            ? _paths.GetCredentialRoot(adapterId, profileId, create)
+            : _credentialRoot!;
+        if (create && _paths is null) Directory.CreateDirectory(root);
+        return Path.Combine(root, credentialId + ".dpapi");
+    }
 }
 
 public sealed class SecretRedactor

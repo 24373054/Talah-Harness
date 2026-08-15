@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Talah.Harness.Contracts;
+using Talah.Harness.Runtime;
 
 namespace Talah.Harness.Adapters.OpenCode;
 
@@ -9,7 +10,7 @@ public sealed class OpenCodeAdapter(
     IOpenCodeExecutableDiscovery? discovery = null,
     IOpenCodeProcessSupervisor? supervisor = null,
     HttpMessageHandler? handler = null,
-    TimeSpan? startupTimeout = null) : IKernelAdapter, IInteractiveLoginCompletionAdapter, ISessionRenameAdapter
+    TimeSpan? startupTimeout = null) : IKernelAdapter, IInteractiveLoginCompletionAdapter, ISessionRenameAdapter, ICredentialChangeRequiresRestart
 {
     public const string Id = "opencode";
     private static readonly KernelCapabilities Capabilities = new(
@@ -31,10 +32,13 @@ public sealed class OpenCodeAdapter(
     private OpenCodeServerConnection? _connection;
     private OpenCodeApiClient? _api;
     private OpenCodeSseClient? _sse;
+    private OpenCodeEventBridge? _eventBridge;
     private OpenCodeEventNormalizer? _normalizer;
     private KernelAvailability _availability = KernelAvailability.Unknown;
 
     public string AdapterId => Id;
+
+    public bool RequiresRestartAfterCredentialChange => true;
 
     public KernelDescriptor Descriptor => new(
         Id, "OpenCode Server", "OpenCode HTTP/OpenAPI + SSE", "1.0.0", _executable?.Version,
@@ -69,9 +73,11 @@ public sealed class OpenCodeAdapter(
         try
         {
             var launcher = new OpenCodeServerLauncher(_supervisor, _handler, _startupTimeout);
-            _connection = await launcher.StartAsync(_executable, context.Profile.DataRoot, context.Profile.Environment, cancellationToken).ConfigureAwait(false);
+            IReadOnlyDictionary<string, string> processEnvironment = await BuildProcessEnvironmentAsync(context.Profile, cancellationToken).ConfigureAwait(false);
+            _connection = await launcher.StartAsync(_executable, context.Profile.DataRoot, processEnvironment, cancellationToken).ConfigureAwait(false);
             _api = new OpenCodeApiClient(_connection.BaseUri, _connection.Username, _connection.Password, _handler);
             _sse = new OpenCodeSseClient(_api);
+            _eventBridge = new OpenCodeEventBridge(_api, _normalizer, TrackRequest);
             _availability = KernelAvailability.Ready;
         }
         catch
@@ -122,6 +128,17 @@ public sealed class OpenCodeAdapter(
 
     public async Task<AuthenticationState> GetAuthenticationStateAsync(CancellationToken cancellationToken = default)
     {
+        KernelProfile profile = _context?.Profile ?? throw new InvalidOperationException("OpenCode adapter is not initialized.");
+        if (await HasDeepSeekCredentialAsync(profile, cancellationToken).ConfigureAwait(false))
+        {
+            return new AuthenticationState(
+                AuthenticationStatus.SignedIn,
+                "deepseek",
+                "DeepSeek V4",
+                [AuthenticationMethod.Browser, AuthenticationMethod.ApiKey, AuthenticationMethod.VendorDefined],
+                "DeepSeek provider is configured with a DPAPI-protected external API key.");
+        }
+
         OpenCodeProviderList providers = await Api().ListProvidersAsync(null, cancellationToken).ConfigureAwait(false);
         return new AuthenticationState(providers.Connected.Count > 0 ? AuthenticationStatus.SignedIn : AuthenticationStatus.SignedOut,
             providers.Connected.Count > 0 ? string.Join(", ", providers.Connected) : null, null,
@@ -169,6 +186,25 @@ public sealed class OpenCodeAdapter(
 
     public async Task ConfigureApiKeyAsync(ApiKeyCredential credential, CancellationToken cancellationToken = default)
     {
+        KernelProfile profile = _context?.Profile ?? throw new InvalidOperationException("OpenCode adapter is not initialized.");
+        if (string.IsNullOrWhiteSpace(credential.Secret))
+            throw new ArgumentException("API key cannot be empty.", nameof(credential));
+
+        if (string.Equals(credential.ProviderId, "deepseek", StringComparison.OrdinalIgnoreCase))
+        {
+            ValidateDeepSeekEndpoint(credential.BaseUri);
+            if (credential.Options is { Count: > 0 })
+                throw new NotSupportedException("Custom DeepSeek provider options are not enabled for the OpenCode adapter.");
+            DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(profile);
+            await credentials.SetAsync(
+                profile.AdapterId,
+                profile.ProfileId,
+                ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+                credential.Secret,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         ApiKeyEndpointPolicy.Validate(credential.BaseUri, nameof(credential));
         var metadata = new Dictionary<string, string>(credential.Options ?? new Dictionary<string, string>(), StringComparer.Ordinal);
         if (credential.BaseUri is not null) metadata["baseURL"] = credential.BaseUri.ToString();
@@ -178,6 +214,17 @@ public sealed class OpenCodeAdapter(
 
     public async Task LogoutAsync(CancellationToken cancellationToken = default)
     {
+        KernelProfile profile = _context?.Profile ?? throw new InvalidOperationException("OpenCode adapter is not initialized.");
+        DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(profile);
+        if (await credentials.DeleteAsync(
+            profile.AdapterId,
+            profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         OpenCodeProviderList providers = await Api().ListProvidersAsync(null, cancellationToken).ConfigureAwait(false);
         foreach (string provider in providers.Connected)
             await Api().RemoveAuthAsync(provider, cancellationToken).ConfigureAwait(false);
@@ -204,6 +251,7 @@ public sealed class OpenCodeAdapter(
     {
         OpenCodeSession native = await Api().CreateSessionAsync(request.Workspace.RootPath, request.Title, request.AgentId, ParseModel(request.ModelId), cancellationToken).ConfigureAwait(false);
         _directories[native.Id] = request.Workspace.RootPath;
+        await StartDirectoryWatchAsync(request.Workspace.RootPath, cancellationToken).ConfigureAwait(false);
         return ToSession(native);
     }
 
@@ -211,7 +259,11 @@ public sealed class OpenCodeAdapter(
     {
         Validate(session);
         OpenCodeSession native = await Api().GetSessionAsync(session.NativeSessionId, Directory(session), cancellationToken).ConfigureAwait(false);
-        if (native.Directory is not null) _directories[native.Id] = native.Directory;
+        if (native.Directory is not null)
+        {
+            _directories[native.Id] = native.Directory;
+            await StartDirectoryWatchAsync(native.Directory, cancellationToken).ConfigureAwait(false);
+        }
         return ToSession(native);
     }
 
@@ -230,7 +282,11 @@ public sealed class OpenCodeAdapter(
             throw new ArgumentException("A native fork-point ID cannot be empty.", nameof(request));
         OpenCodeSession native = await Api().ForkSessionAsync(request.Session.NativeSessionId, nativeMessageId, Directory(request.Session), cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(request.Title)) native = await Api().UpdateSessionAsync(native.Id, request.Title, null, native.Directory, cancellationToken).ConfigureAwait(false);
-        if (native.Directory is not null) _directories[native.Id] = native.Directory;
+        if (native.Directory is not null)
+        {
+            _directories[native.Id] = native.Directory;
+            await StartDirectoryWatchAsync(native.Directory, cancellationToken).ConfigureAwait(false);
+        }
         return ToSession(native);
     }
 
@@ -301,15 +357,10 @@ public sealed class OpenCodeAdapter(
             diffs.Select(x => x.File).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), false);
     }
 
-    public async IAsyncEnumerable<KernelEvent> WatchEventsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<KernelEvent> WatchEventsAsync(CancellationToken cancellationToken = default)
     {
-        OpenCodeSseClient sse = _sse ?? throw new InvalidOperationException("OpenCode adapter is not ready.");
-        OpenCodeEventNormalizer normalizer = _normalizer ?? throw new InvalidOperationException("OpenCode adapter is not initialized.");
-        await foreach (OpenCodeSseEvent? source in sse.WatchAsync(null, cancellationToken).ConfigureAwait(false))
-        {
-            TrackRequest(source);
-            foreach (KernelEvent item in normalizer.Normalize(source)) yield return item;
-        }
+        OpenCodeEventBridge bridge = _eventBridge ?? throw new InvalidOperationException("OpenCode adapter is not ready.");
+        return bridge.ReadAllAsync(cancellationToken);
     }
 
     public async Task<KernelSessionSummary> RenameSessionAsync(SessionRef session, string title, CancellationToken cancellationToken = default)
@@ -339,6 +390,11 @@ public sealed class OpenCodeAdapter(
 
     public async ValueTask DisposeAsync()
     {
+        if (_eventBridge is not null)
+        {
+            await _eventBridge.DisposeAsync().ConfigureAwait(false);
+            _eventBridge = null;
+        }
         _api?.Dispose();
         if (_connection is not null)
         {
@@ -346,6 +402,51 @@ public sealed class OpenCodeAdapter(
             await _connection.Process.DisposeAsync().ConfigureAwait(false);
         }
         _availability = KernelAvailability.Stopped;
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> BuildProcessEnvironmentAsync(
+        KernelProfile profile,
+        CancellationToken cancellationToken)
+    {
+        var environment = new Dictionary<string, string>(profile.Environment, StringComparer.OrdinalIgnoreCase);
+        DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(profile);
+        string? secret = await credentials.GetAsync(
+            profile.AdapterId,
+            profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(secret))
+            environment[KernelCredentialEnvironment.DeepSeekApiKey] = secret;
+        return environment;
+    }
+
+    private static async Task<bool> HasDeepSeekCredentialAsync(KernelProfile profile, CancellationToken cancellationToken)
+    {
+        DpapiCredentialStore credentials = ProfileCredentialStore.ForProfile(profile);
+        return !string.IsNullOrEmpty(await credentials.GetAsync(
+            profile.AdapterId,
+            profile.ProfileId,
+            ProfileCredentialStore.DeepSeekApiKeyCredentialId,
+            cancellationToken).ConfigureAwait(false));
+    }
+
+    private static void ValidateDeepSeekEndpoint(Uri? baseUri)
+    {
+        if (baseUri is null) return;
+        if (string.Equals(baseUri.AbsoluteUri.TrimEnd('/'), "https://api.deepseek.com", StringComparison.OrdinalIgnoreCase)) return;
+        throw new NotSupportedException("OpenCode DeepSeek integration uses the first-party provider endpoint https://api.deepseek.com. Custom DeepSeek base URIs are not enabled for this release.");
+    }
+
+    private async Task StartDirectoryWatchAsync(string directory, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || _eventBridge is null) return;
+        await _eventBridge.StartDirectoryAsync(directory, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task WaitForDirectoryWatchAsync(string directory, CancellationToken cancellationToken)
+    {
+        if (_eventBridge is null) throw new InvalidOperationException("OpenCode adapter is not ready.");
+        await _eventBridge.WaitForDirectoryAsync(directory, cancellationToken).ConfigureAwait(false);
     }
 
     private OpenCodeApiClient Api() => _api ?? throw new InvalidOperationException("OpenCode adapter is not ready.");

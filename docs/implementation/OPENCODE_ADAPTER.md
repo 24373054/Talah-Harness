@@ -37,7 +37,8 @@ graceful attempt.
 
 The HTTP client rejects non-loopback base URIs, applies Basic Auth, bounds JSON bodies
 at 8 MiB, maps non-success responses to typed/redacted exceptions, honors cancellation,
-and ignores forward-compatible unknown fields. Event vendor JSON is retained. The SSE
+and ignores forward-compatible unknown fields. Event vendor JSON is retained. The adapter starts one SSE watcher per workspace directory and merges them
+into the host event stream; OpenCode 1.18.9 scopes `/event` by directory. The SSE
 client uses a bounded channel (capacity 256, writer waits), a 1 MiB event limit,
 multi-line `data:` parsing, cancellation, exponential reconnect, `Last-Event-ID`, and
 deduplication by SSE ID or vendor event ID. Because `/event` offers no historical replay
@@ -48,7 +49,7 @@ contract, reconnect is best-effort and `CanReplayEvents` is false.
 | Host capability | Advertised | OpenCode 1.18.9 mapping / boundary |
 |---|---:|---|
 | Authenticate | Yes | `/provider/auth`, provider OAuth authorize/callback, `/auth/{providerID}` |
-| API key | Yes | `PUT`/`DELETE /auth/{providerID}`; secrets only in request bodies; custom remote provider endpoints require HTTPS |
+| API key | Yes | DeepSeek uses the built-in `DEEPSEEK_API_KEY` environment binding with a DPAPI-protected host credential; other providers use `PUT`/`DELETE /auth/{providerID}` with secrets only in request bodies |
 | Provider/model listing | Yes | `GET /provider`; flattened as `provider/model` |
 | List/resume sessions | Yes | `GET /session`, `GET /session/{id}` |
 | Create/update | Yes | `POST /session`; public adapter extension maps `PATCH /session/{id}` |

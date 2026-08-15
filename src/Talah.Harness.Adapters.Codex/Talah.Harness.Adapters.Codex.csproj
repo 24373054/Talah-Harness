@@ -8,4 +8,8 @@
     <ProjectReference Include="..\Talah.Harness.Contracts\Talah.Harness.Contracts.csproj" />
     <ProjectReference Include="..\Talah.Harness.Runtime\Talah.Harness.Runtime.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="DeepSeek\deepseek-models-2026-08-15.json" LogicalName="Talah.Harness.Adapters.Codex.DeepSeek.deepseek-models-2026-08-15.json" />
+  </ItemGroup>
 </Project>
