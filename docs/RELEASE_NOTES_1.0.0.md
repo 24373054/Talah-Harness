@@ -29,15 +29,20 @@
 ## Verification status
 
 - Release build, full test suite, published app smoke test, MSIX packaging,
-  self-signing, timestamping, SBOM, checksums, and a host install/uninstall
-  launch test passed.
-- The DeepSeek key supplied for this work was rejected by the official API
-  with HTTP 401 (`Authentication Fails, Your api key: ****baf5 is invalid`).
-  All three live tests were run and failed only at the real model-content
-  assertion. They must be rerun with a valid key before this package is
-  published as final v1.0.0.
-- A clean-Windows-VM test and a Microsoft Defender scan remain pending; this
-  build is therefore explicitly labeled **self-signed development-grade**.
+  self-signing, timestamping, SBOM, and checksums passed.
+- All three opt-in DeepSeek live tests passed with a valid replacement key:
+  - Codex created a real session, streamed real `DEEPSEEK_OK` model content,
+    cancelled the turn, and left no orphaned process.
+  - OpenCode created a real session, received real SSE events and
+    `DEEPSEEK_OK` model content, aborted the turn, and left no orphaned
+    process.
+  - TLAH created a real native run, streamed real `DEEPSEEK_OK` model
+    content, cancelled the run, and cleaned up.
+- A host install/uninstall and UI launch test passed with the signed MSIX; the
+  DeepSeek configuration dialog is visible for all three kernels.
+- A clean-Windows-VM test and a Microsoft Defender scan on a Defender-enabled
+  machine remain pending; this build is therefore explicitly labeled
+  **self-signed development-grade**.
 
 ## Install
 

@@ -62,6 +62,7 @@ HTTP 401:
 {"error":{"message":"Authentication Fails, Your api key: ****baf5 is invalid","type":"authentication_error","param":null,"code":"invalid_request_error"}}
 ```
 
-Therefore all three kernel paths were proven to reach DeepSeek and authenticate
-with the supplied key, but real model-content assertions cannot pass until the
-user supplies a valid key.
+All three kernel paths were proven to reach DeepSeek. A follow-up replacement
+key supplied by the rightsholder was accepted by the official API, and the
+opt-in live tests then passed real model-content assertions for Codex,
+OpenCode, and TLAH. No key value is recorded in this repository.
