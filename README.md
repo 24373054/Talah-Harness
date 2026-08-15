@@ -16,6 +16,9 @@ Version 1.0.0 ships pinned Codex 0.147.0 and OpenCode 1.18.9 Windows x64
 runtimes inside the MSIX and connects all three kernels to DeepSeek through one
 external API key. See
 [`docs/implementation/DEEPSEEK_INTEGRATION.md`](docs/implementation/DEEPSEEK_INTEGRATION.md).
+Self-signed install steps are in
+[`docs/INSTALL_SELFSIGNED.md`](docs/INSTALL_SELFSIGNED.md) and the 1.0.0 release
+notes are in [`docs/RELEASE_NOTES_1.0.0.md`](docs/RELEASE_NOTES_1.0.0.md).
 
 ## Product status
 
