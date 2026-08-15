@@ -78,6 +78,9 @@ if ($CertificatePath) {
 $signingLevel = if (-not $CertificatePath) { 'unsigned-development' } elseif ($Publisher -eq $script:DeveloperPublisher) { 'self-signed-development' } else { 'production-authenticode' }
 $package = & (Join-Path $PSScriptRoot 'New-MsixPackage.ps1') @packageArguments
 
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\RELEASE_NOTES_1.0.0.md') -Destination (Join-Path $releaseRoot 'RELEASE-NOTES.md') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\INSTALL_SELFSIGNED.md') -Destination (Join-Path $releaseRoot 'INSTALL-SELFSIGNED.md') -Force
+
 if ($signingLevel -eq 'self-signed-development' -and $CertificatePath) {
     $certificateCerPath = [System.IO.Path]::ChangeExtension($CertificatePath, '.cer')
     if (Test-Path -LiteralPath $certificateCerPath -PathType Leaf) {

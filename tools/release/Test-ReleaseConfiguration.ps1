@@ -161,7 +161,7 @@ foreach ($file in $productionScanFiles) {
 if ($ArtifactDirectory) {
     $artifacts = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
     Assert-RepositoryChildPath -Path $artifacts -RepositoryRoot $RepositoryRoot | Out-Null
-    foreach ($required in @('SHA256SUMS', 'provenance.json', 'update-manifest.json', 'metadata\sbom.cdx.json', 'metadata\nuget-dependencies.json', 'metadata\THIRD-PARTY-NOTICES.md', 'metadata\RIGHTSHOLDER_AUTHORIZATION.md')) {
+    foreach ($required in @('SHA256SUMS', 'provenance.json', 'update-manifest.json', 'RELEASE-NOTES.md', 'INSTALL-SELFSIGNED.md', 'metadata\sbom.cdx.json', 'metadata\nuget-dependencies.json', 'metadata\THIRD-PARTY-NOTICES.md', 'metadata\RIGHTSHOLDER_AUTHORIZATION.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $artifacts $required) -PathType Leaf)) { Add-Failure "Release artifact is missing: $required" }
     }
     $update = Get-Content -LiteralPath (Join-Path $artifacts 'update-manifest.json') -Raw | ConvertFrom-Json
